@@ -1,7 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Send, Image as ImageIcon, MapPin, Mic, Square, Loader2, ArrowLeft, AlertCircle } from "lucide-react";
-import { ChatMessage, Profile } from "../lib/types";
-import { listMessages, sendMessage, subscribeToMessages, uploadMedia, triggerAIReply } from "../lib/chatApi";
+import { ChatMessage, Profile, Conversation } from "../lib/types";
+import {
+  listMessages,
+  sendMessage,
+  subscribeToMessages,
+  uploadMedia,
+  triggerAIReply,
+  getConversation,
+  markConversationRead,
+  subscribeToConversation,
+} from "../lib/chatApi";
 import MessageBubble from "./MessageBubble";
 
 interface ChatWindowProps {
@@ -41,6 +50,7 @@ export default function ChatWindow({
   showBackButton,
 }: ChatWindowProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [conversation, setConversation] = useState<Conversation | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -50,16 +60,51 @@ export default function ChatWindow({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<BlobPart[]>([]);
 
+  const mergeMessages = (incoming: ChatMessage[]) => {
+    setMessages((prev) => {
+      const byId = new Map(prev.map((m) => [m.id, m]));
+      for (const m of incoming) byId.set(m.id, m);
+      return Array.from(byId.values()).sort((a, b) => a.created_at.localeCompare(b.created_at));
+    });
+  };
+
   useEffect(() => {
-    let unsub = () => {};
+    let unsubMessages = () => {};
+    let unsubConversation = () => {};
+    let pollId: ReturnType<typeof setInterval>;
+
     (async () => {
-      const msgs = await listMessages(conversationId);
+      const [msgs, convo] = await Promise.all([listMessages(conversationId), getConversation(conversationId)]);
       setMessages(msgs);
-      unsub = subscribeToMessages(conversationId, (msg) => {
-        setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      setConversation(convo);
+      markConversationRead(conversationId, me.role);
+
+      unsubMessages = subscribeToMessages(conversationId, (msg) => {
+        mergeMessages([msg]);
+        // A new message arrived while this window is open — I'm reading
+        // it right now, so immediately bump my own last_read_at too.
+        markConversationRead(conversationId, me.role);
       });
+      unsubConversation = subscribeToConversation(conversationId, (updated) => setConversation(updated));
+
+      // ---- Belt-and-suspenders polling fallback ----
+      // Realtime *should* deliver everything instantly via the
+      // subscription above, but if it's ever silently down (network
+      // hiccup, a misconfigured project, etc.) this makes sure nothing
+      // is ever missed for more than a few seconds — messages, photos,
+      // voice notes, and location all flow through this same table, so
+      // one fallback covers all of them.
+      pollId = setInterval(async () => {
+        const latest = await listMessages(conversationId);
+        mergeMessages(latest);
+      }, 4000);
     })();
-    return () => unsub();
+
+    return () => {
+      unsubMessages();
+      unsubConversation();
+      clearInterval(pollId);
+    };
   }, [conversationId]);
 
   useEffect(() => {
@@ -228,7 +273,15 @@ export default function ChatWindow({
             Koi message nahi hai abhi — pehla message bhejo.
           </div>
         ) : (
-          messages.map((m) => <MessageBubble key={m.id} message={m} isMine={m.sender_id === me.id} />)
+          messages.map((m) => {
+            const isMine = m.sender_id === me.id;
+            // "Read" = the OTHER side's last_read_at is at/after this
+            // message's created_at. Only meaningful for messages I sent.
+            const otherLastReadAt =
+              me.role === "customer" ? conversation?.owner_last_read_at : conversation?.customer_last_read_at;
+            const isRead = isMine && !!otherLastReadAt && otherLastReadAt >= m.created_at;
+            return <MessageBubble key={m.id} message={m} isMine={isMine} isRead={isRead} />;
+          })
         )}
         <div ref={bottomRef} />
       </div>
