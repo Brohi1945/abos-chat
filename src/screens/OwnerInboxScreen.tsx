@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { LogOut, MessageCircle, Bot } from "lucide-react";
+import { LogOut, MessageCircle, Bot, ArrowLeft } from "lucide-react";
 import { Profile, Conversation } from "../lib/types";
 import { listAllConversations, signOut, toggleAiMode } from "../lib/chatApi";
 import ChatWindow from "../components/ChatWindow";
@@ -13,6 +13,7 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [loading, setLoading] = useState(true);
+  const [mobileShowList, setMobileShowList] = useState(true);
 
   const load = async () => {
     setLoading(true);
@@ -23,13 +24,23 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 15000); // simple polling refresh for the inbox list
+    const interval = setInterval(load, 15000);
     return () => clearInterval(interval);
   }, []);
 
   const handleSignOut = async () => {
     await signOut();
     onSignedOut();
+  };
+
+  const handleSelect = (c: Conversation) => {
+    setSelected(c);
+    setMobileShowList(false);
+  };
+
+  const handleBack = () => {
+    setMobileShowList(true);
+    setSelected(null);
   };
 
   const handleToggleAi = async () => {
@@ -42,13 +53,20 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
 
   return (
     <div className="h-screen flex bg-slate-950">
-      <div className="w-72 border-r border-slate-800 flex flex-col shrink-0">
+      {/* Sidebar — full width on mobile when list shown, hidden on mobile when chat open */}
+      <div
+        className={`border-r border-slate-800 flex flex-col shrink-0 bg-slate-950
+          ${mobileShowList ? "flex w-full md:w-72" : "hidden md:flex md:w-72"}`}
+      >
         <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
           <div>
             <div className="font-bold text-sm">Inbox</div>
             <div className="text-[11px] text-slate-500">{me.email}</div>
           </div>
-          <button onClick={handleSignOut} className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-900">
+          <button
+            onClick={handleSignOut}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-900"
+          >
             <LogOut size={15} />
           </button>
         </div>
@@ -57,12 +75,14 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
           {loading ? (
             <div className="px-4 py-8 text-center text-xs text-slate-500">Loading…</div>
           ) : conversations.length === 0 ? (
-            <div className="px-4 py-8 text-center text-xs text-slate-500">Abhi koi customer conversation nahi hai.</div>
+            <div className="px-4 py-8 text-center text-xs text-slate-500">
+              Abhi koi customer conversation nahi hai.
+            </div>
           ) : (
             conversations.map((c) => (
               <button
                 key={c.id}
-                onClick={() => setSelected(c)}
+                onClick={() => handleSelect(c)}
                 className={`w-full flex items-center gap-3 px-4 py-3 text-left border-b border-slate-900 ${
                   selected?.id === c.id ? "bg-slate-900" : "hover:bg-slate-900/50"
                 }`}
@@ -75,7 +95,9 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
                     {c.customer?.name || c.customer?.email || "Customer"}
                     {c.ai_mode && <Bot size={11} className="text-brand shrink-0" />}
                   </div>
-                  <div className="text-[10px] text-slate-500 truncate">{c.customer?.customer_number}</div>
+                  <div className="text-[10px] text-slate-500 truncate">
+                    {c.customer?.customer_number}
+                  </div>
                 </div>
               </button>
             ))
@@ -83,17 +105,25 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
         </div>
       </div>
 
-      <div className="flex-1 min-w-0 flex flex-col">
+      {/* Chat area — hidden on mobile when list shown */}
+      <div
+        className={`flex-1 min-w-0 flex flex-col ${
+          mobileShowList ? "hidden md:flex" : "flex"
+        }`}
+      >
         {selected ? (
           <>
+            {/* AI toggle bar */}
             <div className="px-4 py-2 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
-              <div className="flex items-center gap-1.5 text-xs text-slate-400">
-                <Bot size={13} />
-                AI auto-reply for this customer
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 min-w-0">
+                <Bot size={13} className="shrink-0" />
+                <span className="truncate">AI auto-reply for this customer</span>
               </div>
               <button
                 onClick={handleToggleAi}
-                className={`relative w-9 h-5 rounded-full transition ${selected.ai_mode ? "bg-brand" : "bg-slate-700"}`}
+                className={`relative w-9 h-5 rounded-full transition shrink-0 ml-3 ${
+                  selected.ai_mode ? "bg-brand" : "bg-slate-700"
+                }`}
               >
                 <span
                   className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
@@ -102,17 +132,22 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
                 />
               </button>
             </div>
+
             <div className="flex-1 min-h-0">
               <ChatWindow
                 conversationId={selected.id}
                 me={me}
                 headerTitle={selected.customer?.name || selected.customer?.email || "Customer"}
                 headerSubtitle={selected.customer?.customer_number}
+                onBack={handleBack}
+                showBackButton={!mobileShowList}
               />
             </div>
           </>
         ) : (
-          <div className="h-full flex items-center justify-center text-xs text-slate-500">Ek conversation select karo.</div>
+          <div className="h-full flex items-center justify-center text-xs text-slate-500">
+            Ek conversation select karo.
+          </div>
         )}
       </div>
     </div>
