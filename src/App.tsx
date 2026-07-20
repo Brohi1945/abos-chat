@@ -7,6 +7,20 @@ import AuthScreen from "./screens/AuthScreen";
 import CustomerChatScreen from "./screens/CustomerChatScreen";
 import OwnerInboxScreen from "./screens/OwnerInboxScreen";
 
+// Comma-separated list of emails that should see the Owner Inbox even
+// before abos_chat_profiles.role has been flipped to 'owner' in the DB.
+// UI convenience only — actual data access is still gated server-side
+// by Postgres RLS, which only trusts abos_chat_profiles.role = 'owner'.
+const OWNER_EMAILS = (import.meta.env.VITE_OWNER_EMAILS || "")
+  .split(",")
+  .map((e) => e.trim().toLowerCase())
+  .filter(Boolean);
+
+function isOwner(profile: Profile): boolean {
+  if (profile.role === "owner") return true;
+  return !!profile.email && OWNER_EMAILS.includes(profile.email.toLowerCase());
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [profile, setProfile] = useState<Profile | null>(null);
@@ -41,7 +55,7 @@ export default function App() {
     return <AuthScreen onAuthed={refresh} />;
   }
 
-  return profile.role === "owner" ? (
+  return isOwner(profile) ? (
     <OwnerInboxScreen me={profile} onSignedOut={refresh} />
   ) : (
     <CustomerChatScreen me={profile} onSignedOut={refresh} />
