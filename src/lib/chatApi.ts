@@ -143,6 +143,51 @@ export async function toggleAiMode(conversationId: string, aiMode: boolean) {
 }
 
 /**
+ * Marks "now" as the last-read time for whichever side I am. This is
+ * what powers the WhatsApp-style blue double-tick on the OTHER side:
+ * once they've called this, any of MY messages with created_at before
+ * this timestamp render as "read" for me.
+ */
+export async function markConversationRead(conversationId: string, myRole: "customer" | "owner") {
+  const column = myRole === "customer" ? "customer_last_read_at" : "owner_last_read_at";
+  const { error } = await supabase
+    .from("abos_chat_conversations")
+    .update({ [column]: new Date().toISOString() })
+    .eq("id", conversationId);
+  if (error) console.error(error);
+}
+
+export async function getConversation(conversationId: string): Promise<Conversation | null> {
+  const { data, error } = await supabase
+    .from("abos_chat_conversations")
+    .select("*")
+    .eq("id", conversationId)
+    .maybeSingle();
+  if (error) {
+    console.error(error);
+    return null;
+  }
+  return data as Conversation;
+}
+
+/** Subscribes to changes on the conversation row itself (ai_mode toggles,
+ *  and — importantly — the other side's last_read_at ticking forward so
+ *  read receipts update live without a refresh). */
+export function subscribeToConversation(conversationId: string, onUpdate: (convo: Conversation) => void) {
+  const channel = supabase
+    .channel(`conversation-${conversationId}`)
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "abos_chat_conversations", filter: `id=eq.${conversationId}` },
+      (payload) => onUpdate(payload.new as Conversation)
+    )
+    .subscribe();
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+/**
  * Asks the server to generate + insert a Groq AI reply for this
  * conversation (server checks ai_mode is actually on before doing
  * anything — this call is a no-op if it's off). Fire-and-forget is
