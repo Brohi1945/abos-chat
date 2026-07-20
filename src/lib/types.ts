@@ -13,6 +13,8 @@ export interface Conversation {
   created_at: string;
   last_message_at: string;
   ai_mode: boolean;
+  customer_last_read_at: string | null;
+  owner_last_read_at: string | null;
   // joined in on the owner's inbox view
   customer?: Profile;
 }
