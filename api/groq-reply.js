@@ -1,12 +1,17 @@
 // POST /api/groq-reply
 // Body: { conversationId: string }
+// Header: Authorization: Bearer <supabase access token>
 //
-// Only fires the AI when the conversation has ai_mode = true (checked
-// server-side, not trusted from the client). Fetches recent message
-// history, asks Groq for a reply, and inserts it via the service-role
-// key so it works regardless of who/what triggered this call.
+// Only fires the AI when:
+//  - the caller is verified server-side (the conversation's own
+//    customer, or a store owner) — never trusted purely from the
+//    request body, so random callers can't hit this endpoint
+//  - the conversation has ai_mode = true (checked server-side)
+//  - no AI reply was already inserted in the last 20s for this
+//    conversation (basic duplicate/abuse protection)
 import { supabaseServer } from "./_lib/supabaseServer.js";
 import { callGroqChat } from "./_lib/groqClient.js";
+import { verifyCallerForConversation } from "./_lib/verifyCaller.js";
 
 const SYSTEM_PROMPT = `You are a friendly, concise customer-support assistant for a small retail store using ABOS.
 Reply in the same language/style the customer used (Roman Urdu/Hindi mix, English, or a mix — mirror them).
@@ -15,6 +20,7 @@ status in this conversation — if asked something you can't verify, say a team 
 rather than guessing. Never invent prices, stock levels, or order details.`;
 
 const BOT_NAME = "ABOS Assistant";
+const MIN_SECONDS_BETWEEN_AI_REPLIES = 20;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -26,6 +32,14 @@ export default async function handler(req, res) {
     const { conversationId } = req.body || {};
     if (!conversationId) {
       res.status(400).json({ error: "conversationId is required" });
+      return;
+    }
+
+    // ---- Auth: is this caller actually allowed to trigger AI for
+    // this conversation? (the conversation's customer, or an owner) ----
+    const auth = await verifyCallerForConversation(req, conversationId);
+    if (!auth.ok) {
+      res.status(auth.status).json({ error: auth.message });
       return;
     }
 
@@ -44,6 +58,23 @@ export default async function handler(req, res) {
     if (!conversation.ai_mode) {
       // AI is off for this conversation — no-op, not an error.
       res.status(200).json({ skipped: true, reason: "ai_mode is off" });
+      return;
+    }
+
+    // ---- Basic rate limit: don't fire twice within a short window,
+    // in case of a duplicate/replayed trigger call. ----
+    const since = new Date(Date.now() - MIN_SECONDS_BETWEEN_AI_REPLIES * 1000).toISOString();
+    const { data: recentAiReply } = await supabase
+      .from("abos_chat_messages")
+      .select("id")
+      .eq("conversation_id", conversationId)
+      .eq("is_ai", true)
+      .gte("created_at", since)
+      .limit(1)
+      .maybeSingle();
+
+    if (recentAiReply) {
+      res.status(200).json({ skipped: true, reason: "rate limited" });
       return;
     }
 
@@ -82,7 +113,7 @@ export default async function handler(req, res) {
     if (!botProfile) {
       res.status(500).json({
         error:
-          "No bot profile found. Run the ai-reply migration's INSERT for the bot profile (see supabase/migration_ai_replies.sql) before enabling AI mode.",
+          "No bot profile found. Run supabase/migration_phase0_fixes.sql (see README) before enabling AI mode.",
       });
       return;
     }
