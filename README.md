@@ -1,4 +1,4 @@
-# ABOS Chat
+   # ABOS Chat
 
 Standalone messaging app for ABOS customers — separate repo, **same Supabase project and same Vercel account** as ABOS.
 
