@@ -113,7 +113,7 @@ export default async function handler(req, res) {
     if (!botProfile) {
       res.status(500).json({
         error:
-          "No bot profile found. Run supabase/migration_phase0_fixes.sql (see README) before enabling AI mode.",
+          "No bot profile found. Run supabase/migration_ai_replies.sql (see README) before enabling AI mode.",
       });
       return;
     }
