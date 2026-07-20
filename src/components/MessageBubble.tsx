@@ -1,10 +1,12 @@
 import React from "react";
-import { MapPin, ExternalLink } from "lucide-react";
+import { MapPin, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 
 interface MessageBubbleProps {
   message: ChatMessage;
   isMine: boolean;
+  // Only meaningful when isMine is true — has the OTHER side read this yet?
+  isRead?: boolean;
 }
 
 function mapsEmbedUrl(lat: number, lng: number) {
@@ -14,7 +16,7 @@ function mapsSearchUrl(lat: number, lng: number) {
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
 }
 
-export default function MessageBubble({ message, isMine }: MessageBubbleProps) {
+export default function MessageBubble({ message, isMine, isRead }: MessageBubbleProps) {
   const time = new Date(message.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   return (
@@ -82,8 +84,18 @@ export default function MessageBubble({ message, isMine }: MessageBubbleProps) {
           </div>
         )}
 
-        <div className={`px-3.5 pb-1.5 text-[10px] ${isMine ? "text-white/70" : "text-slate-500"} text-right`}>
-          {time}
+        <div
+          className={`px-3.5 pb-1.5 text-[10px] flex items-center justify-end gap-1 ${
+            isMine ? "text-white/70" : "text-slate-500"
+          }`}
+        >
+          <span>{time}</span>
+          {isMine &&
+            (isRead ? (
+              <CheckCheck size={13} className="text-sky-300" />
+            ) : (
+              <Check size={13} className={isMine ? "text-white/70" : "text-slate-500"} />
+            ))}
         </div>
       </div>
     </div>
