@@ -11,8 +11,3 @@ if (!url || !anonKey) {
 }
 
 export const supabase = createClient(url, anonKey);
-
-export const OWNER_EMAILS = (import.meta.env.VITE_OWNER_EMAILS || "")
-  .split(",")
-  .map((e: string) => e.trim().toLowerCase())
-  .filter(Boolean);
