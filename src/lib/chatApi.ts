@@ -189,16 +189,22 @@ export function subscribeToConversation(conversationId: string, onUpdate: (convo
 
 /**
  * Asks the server to generate + insert a Groq AI reply for this
- * conversation (server checks ai_mode is actually on before doing
- * anything — this call is a no-op if it's off). Fire-and-forget is
- * fine; errors are logged, not thrown, since it should never block
- * the customer's own message from having been sent.
+ * conversation (server checks ai_mode is actually on, and that the
+ * caller is really a participant, before doing anything — this call
+ * is a no-op if ai_mode is off). Fire-and-forget is fine; errors are
+ * logged, not thrown, since it should never block the customer's own
+ * message from having been sent.
  */
 export async function triggerAIReply(conversationId: string) {
   try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
     await fetch("/api/groq-reply", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({ conversationId }),
     });
   } catch (err) {
