@@ -1,5 +1,5 @@
 import React from "react";
-import { MapPin, ExternalLink, Check, CheckCheck } from "lucide-react";
+import { MapPin, ExternalLink, Check, CheckCheck, Package } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 
 interface MessageBubbleProps {
@@ -78,9 +78,43 @@ export default function MessageBubble({ message, isMine, isRead }: MessageBubble
               }`}
             >
               <MapPin size={12} />
-              <span className="truncate">Live location</span>
+              {/* This is a one-time location share, not a live-updating
+                  position — worded accordingly so it doesn't imply
+                  ongoing tracking that isn't actually happening. */}
+              <span className="truncate">Location shared</span>
               <ExternalLink size={11} className="ml-auto shrink-0" />
             </a>
+          </div>
+        )}
+
+        {message.kind === "product" && message.product_snapshot && (
+          <div className={`w-full max-w-[240px] ${isMine ? "" : ""}`}>
+            <div className={`flex items-center gap-2 px-3.5 pt-2.5 ${isMine ? "" : ""}`}>
+              <div
+                className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                  isMine ? "bg-white/20" : "bg-brand/20 text-brand"
+                }`}
+              >
+                <Package size={16} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold truncate">{message.product_snapshot.name}</div>
+                {message.product_snapshot.category && (
+                  <div className={`text-[10px] truncate ${isMine ? "text-white/70" : "text-slate-400"}`}>
+                    {message.product_snapshot.category}
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="px-3.5 pt-2 pb-2.5 flex items-center justify-between text-xs">
+              <span className="font-semibold">Rs {message.product_snapshot.price}</span>
+              <span className={isMine ? "text-white/80" : "text-slate-400"}>
+                {message.product_snapshot.stock > 0
+                  ? `${message.product_snapshot.stock} in stock`
+                  : "Out of stock"}
+              </span>
+            </div>
+            {message.body && <div className="px-3.5 pb-2.5 text-sm">{message.body}</div>}
           </div>
         )}
 
