@@ -1,0 +1,22 @@
+-- ============================================================
+--  ABOS Chat — Phase 1 reliability fix: race condition in
+--  getOrCreateMyConversation (src/lib/chatApi.ts)
+--  Run AFTER schema.sql + migration_ai_replies.sql +
+--  migration_sync_with_live_db.sql + migration_ai_reply_webhook.sql
+-- ============================================================
+--
+-- getOrCreateMyConversation does a SELECT (does a conversation for this
+-- customer already exist?) then, if not, an INSERT. If the same
+-- customer opens two tabs at once, both can run the SELECT before
+-- either INSERT lands, both see "no conversation yet", and both
+-- INSERT — creating two conversation rows for one customer. A
+-- client-side check-then-insert can never fully close that window;
+-- only a database constraint can.
+--
+-- This makes "one conversation per customer" an actual DB guarantee.
+-- Whichever tab's INSERT loses the race now gets a 23505
+-- unique-violation error instead of silently creating a duplicate —
+-- chatApi.ts already catches that error code and re-fetches the row
+-- the winning tab created.
+alter table abos_chat_conversations
+  add constraint abos_chat_conversations_customer_id_key unique (customer_id);
