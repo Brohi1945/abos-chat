@@ -38,7 +38,16 @@ export async function getCurrentProfile(): Promise<Profile | null> {
 
 // ---------- Conversations ----------
 
-/** Gets (or creates) the single conversation thread for a customer. */
+/**
+ * Gets (or creates) the single conversation thread for a customer.
+ *
+ * Race-safe: abos_chat_conversations.customer_id has a DB-level UNIQUE
+ * constraint (see supabase/migration_sync_phase1.sql). If two tabs both
+ * land here at once with no existing conversation, both will attempt an
+ * INSERT — one wins, the other gets a 23505 unique-violation error
+ * instead of silently creating a second conversation row. We catch that
+ * specific error and just fetch the row the other tab created.
+ */
 export async function getOrCreateMyConversation(customerId: string): Promise<Conversation | null> {
   const { data: existing } = await supabase
     .from("abos_chat_conversations")
@@ -52,11 +61,22 @@ export async function getOrCreateMyConversation(customerId: string): Promise<Con
     .insert({ customer_id: customerId })
     .select("*")
     .single();
-  if (error) {
-    console.error(error);
-    return null;
+
+  if (!error) return created as Conversation;
+
+  if (error.code === "23505") {
+    // Another tab won the race between our SELECT and this INSERT —
+    // expected, not a real failure. Fetch the conversation it created.
+    const { data: theirs } = await supabase
+      .from("abos_chat_conversations")
+      .select("*")
+      .eq("customer_id", customerId)
+      .maybeSingle();
+    if (theirs) return theirs as Conversation;
   }
-  return created as Conversation;
+
+  console.error(error);
+  return null;
 }
 
 /** Owner inbox: every conversation, newest activity first, with customer info joined in. */
@@ -74,17 +94,45 @@ export async function listAllConversations(): Promise<Conversation[]> {
 
 // ---------- Messages ----------
 
-export async function listMessages(conversationId: string): Promise<ChatMessage[]> {
-  const { data, error } = await supabase
+const MESSAGES_PAGE_SIZE = 30;
+
+export interface MessagesPage {
+  /** Oldest-first, ready to render as-is. */
+  messages: ChatMessage[];
+  /** True if there are older messages beyond this page. */
+  hasMore: boolean;
+}
+
+/**
+ * Loads one page of messages, newest MESSAGES_PAGE_SIZE by default.
+ * Pass `before` (an ISO timestamp — typically the created_at of the
+ * currently-oldest loaded message) to page further back for a
+ * "load earlier messages" control. Without a `before`, this always
+ * gets the most recent page, which is what the initial chat load and
+ * the realtime-fallback poll both want.
+ */
+export async function listMessages(conversationId: string, before?: string): Promise<MessagesPage> {
+  let query = supabase
     .from("abos_chat_messages")
     .select("*")
     .eq("conversation_id", conversationId)
-    .order("created_at", { ascending: true });
+    .order("created_at", { ascending: false })
+    .limit(MESSAGES_PAGE_SIZE + 1); // fetch one extra just to detect "hasMore"
+
+  if (before) {
+    query = query.lt("created_at", before);
+  }
+
+  const { data, error } = await query;
   if (error) {
     console.error(error);
-    return [];
+    return { messages: [], hasMore: false };
   }
-  return (data || []) as ChatMessage[];
+
+  const rows = data || [];
+  const hasMore = rows.length > MESSAGES_PAGE_SIZE;
+  const page = rows.slice(0, MESSAGES_PAGE_SIZE).reverse(); // oldest-first for rendering
+  return { messages: page, hasMore };
 }
 
 interface SendMessageInput {
@@ -99,6 +147,10 @@ interface SendMessageInput {
 }
 
 export async function sendMessage(input: SendMessageInput) {
+  // Note: AI auto-reply is no longer triggered from here. A Postgres
+  // trigger (supabase/migration_ai_reply_webhook.sql) fires server-side
+  // on insert into abos_chat_messages when ai_mode is on, so nothing
+  // extra needs to happen client-side after this insert.
   const { error } = await supabase.from("abos_chat_messages").insert({
     conversation_id: input.conversationId,
     sender_id: input.senderId,
@@ -185,31 +237,6 @@ export function subscribeToConversation(conversationId: string, onUpdate: (convo
   return () => {
     supabase.removeChannel(channel);
   };
-}
-
-/**
- * Asks the server to generate + insert a Groq AI reply for this
- * conversation (server checks ai_mode is actually on, and that the
- * caller is really a participant, before doing anything — this call
- * is a no-op if ai_mode is off). Fire-and-forget is fine; errors are
- * logged, not thrown, since it should never block the customer's own
- * message from having been sent.
- */
-export async function triggerAIReply(conversationId: string) {
-  try {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData.session?.access_token;
-    await fetch("/api/groq-reply", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify({ conversationId }),
-    });
-  } catch (err) {
-    console.error("AI reply trigger failed", err);
-  }
 }
 
 // ---------- Storage (images / voice notes) ----------
