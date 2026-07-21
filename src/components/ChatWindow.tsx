@@ -1,12 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Image as ImageIcon, MapPin, Mic, Square, Loader2, ArrowLeft, AlertCircle } from "lucide-react";
+import { Send, Image as ImageIcon, MapPin, Mic, Square, Loader2, ArrowLeft, AlertCircle, ChevronUp } from "lucide-react";
 import { ChatMessage, Profile, Conversation } from "../lib/types";
 import {
   listMessages,
   sendMessage,
   subscribeToMessages,
   uploadMedia,
-  triggerAIReply,
   getConversation,
   markConversationRead,
   subscribeToConversation,
@@ -18,7 +17,6 @@ interface ChatWindowProps {
   me: Profile;
   headerTitle: string;
   headerSubtitle?: string;
-  aiMode?: boolean;
   /** Called when mobile back button is tapped (owner inbox only) */
   onBack?: () => void;
   /** Whether to show the back arrow (mobile owner view) */
@@ -45,20 +43,26 @@ export default function ChatWindow({
   me,
   headerTitle,
   headerSubtitle,
-  aiMode,
   onBack,
   showBackButton,
 }: ChatWindowProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [hasMoreOlder, setHasMoreOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<BlobPart[]>([]);
+  // Tracks the last message's id so the auto-scroll-to-bottom effect
+  // can tell "a new message arrived at the end" apart from "older
+  // messages were just prepended" — only the former should scroll.
+  const lastMessageIdRef = useRef<string | null>(null);
 
   const mergeMessages = (incoming: ChatMessage[]) => {
     setMessages((prev) => {
@@ -74,8 +78,9 @@ export default function ChatWindow({
     let pollId: ReturnType<typeof setInterval>;
 
     (async () => {
-      const [msgs, convo] = await Promise.all([listMessages(conversationId), getConversation(conversationId)]);
-      setMessages(msgs);
+      const [page, convo] = await Promise.all([listMessages(conversationId), getConversation(conversationId)]);
+      setMessages(page.messages);
+      setHasMoreOlder(page.hasMore);
       setConversation(convo);
       markConversationRead(conversationId, me.role);
 
@@ -91,12 +96,12 @@ export default function ChatWindow({
       // Realtime *should* deliver everything instantly via the
       // subscription above, but if it's ever silently down (network
       // hiccup, a misconfigured project, etc.) this makes sure nothing
-      // is ever missed for more than a few seconds — messages, photos,
-      // voice notes, and location all flow through this same table, so
-      // one fallback covers all of them.
+      // is ever missed for more than a few seconds. Only re-fetches the
+      // latest page (not full history) — plenty to catch anything the
+      // realtime channel might have dropped recently.
       pollId = setInterval(async () => {
         const latest = await listMessages(conversationId);
-        mergeMessages(latest);
+        mergeMessages(latest.messages);
       }, 4000);
     })();
 
@@ -108,24 +113,54 @@ export default function ChatWindow({
   }, [conversationId]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages.length]);
+    const lastId = messages[messages.length - 1]?.id ?? null;
+    if (lastId && lastId !== lastMessageIdRef.current) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+    lastMessageIdRef.current = lastId;
+  }, [messages]);
+
+  const loadOlderMessages = async () => {
+    if (loadingOlder || !hasMoreOlder || messages.length === 0) return;
+    setLoadingOlder(true);
+
+    const oldest = messages[0].created_at;
+    const container = scrollContainerRef.current;
+    const prevScrollHeight = container?.scrollHeight ?? 0;
+    const prevScrollTop = container?.scrollTop ?? 0;
+
+    const page = await listMessages(conversationId, oldest);
+    setMessages((prev) => {
+      const existingIds = new Set(prev.map((m) => m.id));
+      const newOnes = page.messages.filter((m) => !existingIds.has(m.id));
+      return [...newOnes, ...prev];
+    });
+    setHasMoreOlder(page.hasMore);
+    setLoadingOlder(false);
+
+    // Keep the view visually still: after older messages are prepended,
+    // the container grows taller above where the user was looking —
+    // push scrollTop forward by exactly that growth so nothing jumps.
+    requestAnimationFrame(() => {
+      if (container) {
+        const grew = container.scrollHeight - prevScrollHeight;
+        container.scrollTop = prevScrollTop + grew;
+      }
+    });
+  };
 
   const showError = (msg: string) => {
     setErrorMsg(msg);
     setTimeout(() => setErrorMsg(""), 4000);
   };
 
-  const maybeTriggerAI = () => {
-    if (aiMode && me.role === "customer") triggerAIReply(conversationId);
-  };
-
   const handleSendText = async () => {
     const body = text.trim();
     if (!body) return;
     setText("");
+    // AI auto-reply (if ai_mode is on) is now triggered server-side by a
+    // Postgres trigger on insert — nothing to call from the client here.
     await sendMessage({ conversationId, senderId: me.id, senderRole: me.role, kind: "text", body });
-    maybeTriggerAI();
   };
 
   const handlePickImage = () => fileInputRef.current?.click();
@@ -267,7 +302,20 @@ export default function ChatWindow({
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4">
+        {hasMoreOlder && (
+          <div className="flex justify-center mb-3">
+            <button
+              onClick={loadOlderMessages}
+              disabled={loadingOlder}
+              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 bg-slate-800/60 hover:bg-slate-800 rounded-full px-3 py-1.5 disabled:opacity-50"
+            >
+              {loadingOlder ? <Loader2 size={12} className="animate-spin" /> : <ChevronUp size={12} />}
+              {loadingOlder ? "Load ho raha hai…" : "Purane messages dekhein"}
+            </button>
+          </div>
+        )}
+
         {messages.length === 0 ? (
           <div className="h-full flex items-center justify-center text-xs text-slate-500 text-center px-6">
             Koi message nahi hai abhi — pehla message bhejo.
