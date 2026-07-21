@@ -2,28 +2,40 @@
 // Body: { conversationId: string }
 // Header: x-abos-chat-webhook-secret: <shared secret>
 //
-// Phase 1 change: this endpoint is now called ONLY by a Postgres
-// trigger (see supabase/migration_ai_reply_webhook.sql), via pg_net,
-// whenever a customer sends a text message on a conversation with
-// ai_mode = true. It is never called directly by the browser anymore.
-//
-// Because the caller is our own database and not a person, auth here
-// is a shared secret (stored in Supabase Vault on the DB side, and in
-// this Vercel project's AI_REPLY_WEBHOOK_SECRET env var) instead of a
-// user session token. This shrinks the endpoint's attack surface
-// compared to Phase 0 — it no longer needs to accept or verify
-// arbitrary authenticated user requests at all.
+// Called by a Postgres trigger (see supabase/migration_ai_reply_webhook.sql)
+// via pg_net whenever a customer sends a text message on a conversation
+// with ai_mode = true. Never called directly by the browser.
 import { supabaseServer } from "./_lib/supabaseServer.js";
 import { callGroqChat } from "./_lib/groqClient.js";
 
-const SYSTEM_PROMPT = `You are a friendly, concise customer-support assistant for a small retail store using ABOS.
-Reply in the same language/style the customer used (Roman Urdu/Hindi mix, English, or a mix — mirror them).
-Keep replies short (1-4 sentences), warm, and helpful. You do not have live access to inventory or order
-status in this conversation — if asked something you can't verify, say a team member will confirm shortly
-rather than guessing. Never invent prices, stock levels, or order details.`;
-
 const BOT_NAME = "ABOS Assistant";
 const MIN_SECONDS_BETWEEN_AI_REPLIES = 20;
+const MAX_PRODUCTS_IN_CONTEXT = 20;
+
+function buildSystemPrompt(products) {
+  const inventoryBlock =
+    products.length === 0
+      ? "No product catalog data is currently available."
+      : products
+          .map((p) => {
+            const stockNote = p.stock > 0 ? `${p.stock} in stock` : "out of stock";
+            return `- ${p.name} (${p.category || "uncategorized"}): Rs ${p.price}, ${stockNote}`;
+          })
+          .join("\n");
+
+  return `You are a friendly, concise customer-support assistant for a small retail store using ABOS.
+Reply in the same language/style the customer used (Roman Urdu/Hindi mix, English, or a mix — mirror them).
+Keep replies short (1-4 sentences), warm, and helpful.
+
+Here is the store's CURRENT product catalog (name, category, price in PKR, live stock level).
+Use this to answer questions about price, availability, and stock accurately:
+${inventoryBlock}
+
+Rules:
+- Only state a price or stock number if it appears in the catalog above. Never invent one.
+- If a product the customer asks about isn't in the list above, say you're not sure and a team member will confirm — don't guess.
+- You have no visibility into a specific customer's past orders or delivery status in this conversation — for those, say a team member will check and confirm shortly.`;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -32,7 +44,6 @@ export default async function handler(req, res) {
   }
 
   try {
-    // ---- Auth: shared secret from the DB trigger, not a user JWT. ----
     const expectedSecret = process.env.AI_REPLY_WEBHOOK_SECRET;
     if (!expectedSecret) {
       res.status(500).json({ error: "AI_REPLY_WEBHOOK_SECRET is not set in Vercel environment variables" });
@@ -63,14 +74,10 @@ export default async function handler(req, res) {
       return;
     }
     if (!conversation.ai_mode) {
-      // ai_mode may have been flipped off between the trigger firing
-      // and this request landing — re-check server-side, no-op if so.
       res.status(200).json({ skipped: true, reason: "ai_mode is off" });
       return;
     }
 
-    // ---- Basic rate limit: don't fire twice within a short window,
-    // in case of a duplicate/replayed trigger call. ----
     const since = new Date(Date.now() - MIN_SECONDS_BETWEEN_AI_REPLIES * 1000).toISOString();
     const { data: recentAiReply } = await supabase
       .from("abos_chat_messages")
@@ -103,14 +110,25 @@ export default async function handler(req, res) {
       return;
     }
 
-    const reply = await callGroqChat(SYSTEM_PROMPT, history);
+    // Ground the AI in real, current inventory instead of letting it
+    // guess prices/stock. Small catalogs: pull everything. Larger ones
+    // could instead filter by keyword match against the latest
+    // customer message — flagged as a follow-up if the catalog grows
+    // past a size where sending it all every time gets expensive.
+    const { data: products } = await supabase
+      .from("products")
+      .select("name, category, price, stock")
+      .order("name")
+      .limit(MAX_PRODUCTS_IN_CONTEXT);
+
+    const systemPrompt = buildSystemPrompt(products || []);
+
+    const reply = await callGroqChat(systemPrompt, history);
     if (!reply) {
       res.status(200).json({ skipped: true, reason: "empty reply from model" });
       return;
     }
 
-    // Find the bot's profile row to satisfy the messages table's
-    // sender_id foreign key.
     let { data: botProfile } = await supabase
       .from("abos_chat_profiles")
       .select("id")
