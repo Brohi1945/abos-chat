@@ -1,5 +1,5 @@
 import { supabase } from "./supabaseClient";
-import { Profile, Conversation, ChatMessage, MessageKind } from "./types";
+import { Profile, Conversation, ChatMessage, MessageKind, OwnerInboxRow, ProductSnapshot, LinkedOrder } from "./types";
 
 // ---------- Auth ----------
 
@@ -25,8 +25,6 @@ export async function getCurrentProfile(): Promise<Profile | null> {
   const { data: userData } = await supabase.auth.getUser();
   if (!userData.user) return null;
 
-  // Profile row is created by a DB trigger on signup; poll briefly in case
-  // of a race on the very first load right after signup.
   for (let attempt = 0; attempt < 5; attempt++) {
     const { data, error } = await supabase.from("abos_chat_profiles").select("*").eq("id", userData.user.id).maybeSingle();
     if (data) return data as Profile;
@@ -36,17 +34,19 @@ export async function getCurrentProfile(): Promise<Profile | null> {
   return null;
 }
 
+/** Current user's access token, for calling our own /api/* endpoints
+ *  that expect "Authorization: Bearer <token>" (owner-only endpoints). */
+export async function getAccessToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
 // ---------- Conversations ----------
 
 /**
  * Gets (or creates) the single conversation thread for a customer.
- *
- * Race-safe: abos_chat_conversations.customer_id has a DB-level UNIQUE
- * constraint (see supabase/migration_sync_phase1.sql). If two tabs both
- * land here at once with no existing conversation, both will attempt an
- * INSERT — one wins, the other gets a 23505 unique-violation error
- * instead of silently creating a second conversation row. We catch that
- * specific error and just fetch the row the other tab created.
+ * Race-safe via a DB-level UNIQUE constraint on customer_id — see
+ * supabase/migration_sync_phase1.sql.
  */
 export async function getOrCreateMyConversation(customerId: string): Promise<Conversation | null> {
   const { data: existing } = await supabase
@@ -65,8 +65,6 @@ export async function getOrCreateMyConversation(customerId: string): Promise<Con
   if (!error) return created as Conversation;
 
   if (error.code === "23505") {
-    // Another tab won the race between our SELECT and this INSERT —
-    // expected, not a real failure. Fetch the conversation it created.
     const { data: theirs } = await supabase
       .from("abos_chat_conversations")
       .select("*")
@@ -79,17 +77,15 @@ export async function getOrCreateMyConversation(customerId: string): Promise<Con
   return null;
 }
 
-/** Owner inbox: every conversation, newest activity first, with customer info joined in. */
-export async function listAllConversations(): Promise<Conversation[]> {
-  const { data, error } = await supabase
-    .from("abos_chat_conversations")
-    .select("*, customer:abos_chat_profiles!abos_chat_conversations_customer_id_fkey(*)")
-    .order("last_message_at", { ascending: false });
+/** Owner inbox: every conversation with customer info + unread count,
+ *  computed server-side via the abos_chat_owner_inbox() function. */
+export async function getOwnerInbox(): Promise<OwnerInboxRow[]> {
+  const { data, error } = await supabase.rpc("abos_chat_owner_inbox");
   if (error) {
     console.error(error);
     return [];
   }
-  return (data || []) as Conversation[];
+  return (data || []) as OwnerInboxRow[];
 }
 
 // ---------- Messages ----------
@@ -97,31 +93,19 @@ export async function listAllConversations(): Promise<Conversation[]> {
 const MESSAGES_PAGE_SIZE = 30;
 
 export interface MessagesPage {
-  /** Oldest-first, ready to render as-is. */
   messages: ChatMessage[];
-  /** True if there are older messages beyond this page. */
   hasMore: boolean;
 }
 
-/**
- * Loads one page of messages, newest MESSAGES_PAGE_SIZE by default.
- * Pass `before` (an ISO timestamp — typically the created_at of the
- * currently-oldest loaded message) to page further back for a
- * "load earlier messages" control. Without a `before`, this always
- * gets the most recent page, which is what the initial chat load and
- * the realtime-fallback poll both want.
- */
 export async function listMessages(conversationId: string, before?: string): Promise<MessagesPage> {
   let query = supabase
     .from("abos_chat_messages")
     .select("*")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: false })
-    .limit(MESSAGES_PAGE_SIZE + 1); // fetch one extra just to detect "hasMore"
+    .limit(MESSAGES_PAGE_SIZE + 1);
 
-  if (before) {
-    query = query.lt("created_at", before);
-  }
+  if (before) query = query.lt("created_at", before);
 
   const { data, error } = await query;
   if (error) {
@@ -131,7 +115,7 @@ export async function listMessages(conversationId: string, before?: string): Pro
 
   const rows = data || [];
   const hasMore = rows.length > MESSAGES_PAGE_SIZE;
-  const page = rows.slice(0, MESSAGES_PAGE_SIZE).reverse(); // oldest-first for rendering
+  const page = rows.slice(0, MESSAGES_PAGE_SIZE).reverse();
   return { messages: page, hasMore };
 }
 
@@ -144,13 +128,10 @@ interface SendMessageInput {
   mediaUrl?: string;
   lat?: number;
   lng?: number;
+  productSnapshot?: ProductSnapshot;
 }
 
 export async function sendMessage(input: SendMessageInput) {
-  // Note: AI auto-reply is no longer triggered from here. A Postgres
-  // trigger (supabase/migration_ai_reply_webhook.sql) fires server-side
-  // on insert into abos_chat_messages when ai_mode is on, so nothing
-  // extra needs to happen client-side after this insert.
   const { error } = await supabase.from("abos_chat_messages").insert({
     conversation_id: input.conversationId,
     sender_id: input.senderId,
@@ -160,6 +141,7 @@ export async function sendMessage(input: SendMessageInput) {
     media_url: input.mediaUrl || null,
     lat: input.lat ?? null,
     lng: input.lng ?? null,
+    product_snapshot: input.productSnapshot ?? null,
   });
   if (error) {
     console.error(error);
@@ -172,7 +154,46 @@ export async function sendMessage(input: SendMessageInput) {
   return true;
 }
 
-/** Subscribes to new messages on a conversation in real time. Returns an unsubscribe fn. */
+/** Owner sends a product as a rich card — snapshotted at send time. */
+export async function sendProductMessage(conversationId: string, senderId: string, product: ProductSnapshot) {
+  return sendMessage({ conversationId, senderId, senderRole: "owner", kind: "product", productSnapshot: product });
+}
+
+/** Product search for the owner's "send product" picker. The `products`
+ *  table has a public SELECT policy in ABOS (storefront needs it), so
+ *  this works with the normal anon-key client — no server endpoint
+ *  needed for reading products. */
+export async function searchProducts(query: string): Promise<ProductSnapshot[]> {
+  let q = supabase.from("products").select("id, name, price, stock, category").order("name").limit(15);
+  if (query.trim()) q = q.ilike("name", `%${query.trim()}%`);
+  const { data, error } = await q;
+  if (error) {
+    console.error(error);
+    return [];
+  }
+  return (data || []) as ProductSnapshot[];
+}
+
+/** Best-effort ABOS orders matched to this conversation's customer by
+ *  email (there's no formal link between the two systems — see
+ *  api/customer-orders.js). Owner-only; goes through a server endpoint
+ *  using the service-role key rather than direct client table access. */
+export async function getLinkedOrders(conversationId: string): Promise<LinkedOrder[]> {
+  const token = await getAccessToken();
+  if (!token) return [];
+  try {
+    const res = await fetch(`/api/customer-orders?conversationId=${encodeURIComponent(conversationId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.orders || []) as LinkedOrder[];
+  } catch (err) {
+    console.error(err);
+    return [];
+  }
+}
+
 export function subscribeToMessages(conversationId: string, onInsert: (msg: ChatMessage) => void) {
   const channel = supabase
     .channel(`messages-${conversationId}`)
@@ -187,19 +208,12 @@ export function subscribeToMessages(conversationId: string, onInsert: (msg: Chat
   };
 }
 
-/** Owner flips AI auto-reply on/off for one conversation. */
 export async function toggleAiMode(conversationId: string, aiMode: boolean) {
   const { error } = await supabase.from("abos_chat_conversations").update({ ai_mode: aiMode }).eq("id", conversationId);
   if (error) console.error(error);
   return !error;
 }
 
-/**
- * Marks "now" as the last-read time for whichever side I am. This is
- * what powers the WhatsApp-style blue double-tick on the OTHER side:
- * once they've called this, any of MY messages with created_at before
- * this timestamp render as "read" for me.
- */
 export async function markConversationRead(conversationId: string, myRole: "customer" | "owner") {
   const column = myRole === "customer" ? "customer_last_read_at" : "owner_last_read_at";
   const { error } = await supabase
@@ -222,9 +236,6 @@ export async function getConversation(conversationId: string): Promise<Conversat
   return data as Conversation;
 }
 
-/** Subscribes to changes on the conversation row itself (ai_mode toggles,
- *  and — importantly — the other side's last_read_at ticking forward so
- *  read receipts update live without a refresh). */
 export function subscribeToConversation(conversationId: string, onUpdate: (convo: Conversation) => void) {
   const channel = supabase
     .channel(`conversation-${conversationId}`)
@@ -237,6 +248,50 @@ export function subscribeToConversation(conversationId: string, onUpdate: (convo
   return () => {
     supabase.removeChannel(channel);
   };
+}
+
+// ---------- Typing indicator (Supabase Presence) ----------
+// Ephemeral, in-memory only — no table needed. Each side broadcasts
+// "I'm typing" on a shared per-conversation presence channel; the
+// other side listens. Presence state clears itself automatically if a
+// tab closes or the channel disconnects, so there's nothing to clean up.
+
+export function subscribeToTyping(
+  conversationId: string,
+  myRole: "customer" | "owner",
+  onOtherTyping: (isTyping: boolean) => void
+) {
+  const channel = supabase.channel(`typing-${conversationId}`, { config: { presence: { key: myRole } } });
+
+  const otherKey = myRole === "customer" ? "owner" : "customer";
+
+  channel
+    .on("presence", { event: "sync" }, () => {
+      const state = channel.presenceState() as Record<string, Array<{ typing: boolean }>>;
+      const otherPresence = state[otherKey]?.[0];
+      onOtherTyping(!!otherPresence?.typing);
+    })
+    .subscribe();
+
+  let typingTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const setTyping = (isTyping: boolean) => {
+    channel.track({ typing: isTyping });
+    if (typingTimeout) clearTimeout(typingTimeout);
+    if (isTyping) {
+      // Auto-clear after 4s of no further keystrokes, in case "stopped
+      // typing" never fires (tab backgrounded, etc.) — the indicator
+      // shouldn't get stuck on forever.
+      typingTimeout = setTimeout(() => channel.track({ typing: false }), 4000);
+    }
+  };
+
+  const unsubscribe = () => {
+    if (typingTimeout) clearTimeout(typingTimeout);
+    supabase.removeChannel(channel);
+  };
+
+  return { setTyping, unsubscribe };
 }
 
 // ---------- Storage (images / voice notes) ----------
