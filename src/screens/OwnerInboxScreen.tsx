@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { LogOut, MessageCircle, Bot, ArrowLeft } from "lucide-react";
-import { Profile, Conversation } from "../lib/types";
-import { listAllConversations, signOut, toggleAiMode } from "../lib/chatApi";
+import { Profile, OwnerInboxRow } from "../lib/types";
+import { getOwnerInbox, signOut, toggleAiMode } from "../lib/chatApi";
 import ChatWindow from "../components/ChatWindow";
+import OrderContextPanel from "../components/OrderContextPanel";
 
 interface OwnerInboxScreenProps {
   me: Profile;
@@ -10,15 +11,17 @@ interface OwnerInboxScreenProps {
 }
 
 export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenProps) {
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selected, setSelected] = useState<Conversation | null>(null);
+  const [conversations, setConversations] = useState<OwnerInboxRow[]>([]);
+  const [selected, setSelected] = useState<OwnerInboxRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [mobileShowList, setMobileShowList] = useState(true);
 
   const load = async () => {
     setLoading(true);
-    const data = await listAllConversations();
+    const data = await getOwnerInbox();
     setConversations(data);
+    // keep `selected` in sync with fresh data (e.g. updated unread_count)
+    setSelected((prev) => (prev ? data.find((c) => c.id === prev.id) ?? prev : prev));
     setLoading(false);
   };
 
@@ -33,7 +36,7 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
     onSignedOut();
   };
 
-  const handleSelect = (c: Conversation) => {
+  const handleSelect = (c: OwnerInboxRow) => {
     setSelected(c);
     setMobileShowList(false);
   };
@@ -51,16 +54,25 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
     await toggleAiMode(selected.id, next);
   };
 
+  const totalUnread = conversations.reduce((sum, c) => sum + c.unread_count, 0);
+
   return (
     <div className="h-screen flex bg-slate-950">
-      {/* Sidebar — full width on mobile when list shown, hidden on mobile when chat open */}
+      {/* Sidebar */}
       <div
         className={`border-r border-slate-800 flex flex-col shrink-0 bg-slate-950
           ${mobileShowList ? "flex w-full md:w-72" : "hidden md:flex md:w-72"}`}
       >
         <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between">
           <div>
-            <div className="font-bold text-sm">Inbox</div>
+            <div className="font-bold text-sm flex items-center gap-1.5">
+              Inbox
+              {totalUnread > 0 && (
+                <span className="min-w-[16px] h-4 px-1 rounded-full bg-brand text-white text-[10px] font-bold flex items-center justify-center">
+                  {totalUnread > 99 ? "99+" : totalUnread}
+                </span>
+              )}
+            </div>
             <div className="text-[11px] text-slate-500">{me.email}</div>
           </div>
           <button
@@ -92,28 +104,26 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-semibold truncate flex items-center gap-1.5">
-                    {c.customer?.name || c.customer?.email || "Customer"}
+                    {c.customer_name || c.customer_email || "Customer"}
                     {c.ai_mode && <Bot size={11} className="text-brand shrink-0" />}
                   </div>
-                  <div className="text-[10px] text-slate-500 truncate">
-                    {c.customer?.customer_number}
-                  </div>
+                  <div className="text-[10px] text-slate-500 truncate">{c.customer_number}</div>
                 </div>
+                {c.unread_count > 0 && (
+                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-brand text-white text-[10px] font-bold flex items-center justify-center shrink-0">
+                    {c.unread_count > 99 ? "99+" : c.unread_count}
+                  </span>
+                )}
               </button>
             ))
           )}
         </div>
       </div>
 
-      {/* Chat area — hidden on mobile when list shown */}
-      <div
-        className={`flex-1 min-w-0 flex flex-col ${
-          mobileShowList ? "hidden md:flex" : "flex"
-        }`}
-      >
+      {/* Chat area */}
+      <div className={`flex-1 min-w-0 flex flex-col ${mobileShowList ? "hidden md:flex" : "flex"}`}>
         {selected ? (
           <>
-            {/* AI toggle bar */}
             <div className="px-4 py-2 border-b border-slate-800 flex items-center justify-between bg-slate-900/50">
               <div className="flex items-center gap-1.5 text-xs text-slate-400 min-w-0">
                 <Bot size={13} className="shrink-0" />
@@ -133,12 +143,14 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
               </button>
             </div>
 
+            <OrderContextPanel conversationId={selected.id} />
+
             <div className="flex-1 min-h-0">
               <ChatWindow
                 conversationId={selected.id}
                 me={me}
-                headerTitle={selected.customer?.name || selected.customer?.email || "Customer"}
-                headerSubtitle={selected.customer?.customer_number}
+                headerTitle={selected.customer_name || selected.customer_email || "Customer"}
+                headerSubtitle={selected.customer_number}
                 onBack={handleBack}
                 showBackButton={!mobileShowList}
               />
