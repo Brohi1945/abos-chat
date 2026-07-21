@@ -1,17 +1,20 @@
 // POST /api/groq-reply
 // Body: { conversationId: string }
-// Header: Authorization: Bearer <supabase access token>
+// Header: x-abos-chat-webhook-secret: <shared secret>
 //
-// Only fires the AI when:
-//  - the caller is verified server-side (the conversation's own
-//    customer, or a store owner) — never trusted purely from the
-//    request body, so random callers can't hit this endpoint
-//  - the conversation has ai_mode = true (checked server-side)
-//  - no AI reply was already inserted in the last 20s for this
-//    conversation (basic duplicate/abuse protection)
+// Phase 1 change: this endpoint is now called ONLY by a Postgres
+// trigger (see supabase/migration_ai_reply_webhook.sql), via pg_net,
+// whenever a customer sends a text message on a conversation with
+// ai_mode = true. It is never called directly by the browser anymore.
+//
+// Because the caller is our own database and not a person, auth here
+// is a shared secret (stored in Supabase Vault on the DB side, and in
+// this Vercel project's AI_REPLY_WEBHOOK_SECRET env var) instead of a
+// user session token. This shrinks the endpoint's attack surface
+// compared to Phase 0 — it no longer needs to accept or verify
+// arbitrary authenticated user requests at all.
 import { supabaseServer } from "./_lib/supabaseServer.js";
 import { callGroqChat } from "./_lib/groqClient.js";
-import { verifyCallerForConversation } from "./_lib/verifyCaller.js";
 
 const SYSTEM_PROMPT = `You are a friendly, concise customer-support assistant for a small retail store using ABOS.
 Reply in the same language/style the customer used (Roman Urdu/Hindi mix, English, or a mix — mirror them).
@@ -29,17 +32,21 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { conversationId } = req.body || {};
-    if (!conversationId) {
-      res.status(400).json({ error: "conversationId is required" });
+    // ---- Auth: shared secret from the DB trigger, not a user JWT. ----
+    const expectedSecret = process.env.AI_REPLY_WEBHOOK_SECRET;
+    if (!expectedSecret) {
+      res.status(500).json({ error: "AI_REPLY_WEBHOOK_SECRET is not set in Vercel environment variables" });
+      return;
+    }
+    const incomingSecret = req.headers["x-abos-chat-webhook-secret"];
+    if (!incomingSecret || incomingSecret !== expectedSecret) {
+      res.status(401).json({ error: "Invalid or missing webhook secret" });
       return;
     }
 
-    // ---- Auth: is this caller actually allowed to trigger AI for
-    // this conversation? (the conversation's customer, or an owner) ----
-    const auth = await verifyCallerForConversation(req, conversationId);
-    if (!auth.ok) {
-      res.status(auth.status).json({ error: auth.message });
+    const { conversationId } = req.body || {};
+    if (!conversationId) {
+      res.status(400).json({ error: "conversationId is required" });
       return;
     }
 
@@ -56,7 +63,8 @@ export default async function handler(req, res) {
       return;
     }
     if (!conversation.ai_mode) {
-      // AI is off for this conversation — no-op, not an error.
+      // ai_mode may have been flipped off between the trigger firing
+      // and this request landing — re-check server-side, no-op if so.
       res.status(200).json({ skipped: true, reason: "ai_mode is off" });
       return;
     }
@@ -101,8 +109,8 @@ export default async function handler(req, res) {
       return;
     }
 
-    // Find (or lazily create) the bot's profile row to satisfy the
-    // messages table's sender_id foreign key.
+    // Find the bot's profile row to satisfy the messages table's
+    // sender_id foreign key.
     let { data: botProfile } = await supabase
       .from("abos_chat_profiles")
       .select("id")
@@ -112,8 +120,7 @@ export default async function handler(req, res) {
 
     if (!botProfile) {
       res.status(500).json({
-        error:
-          "No bot profile found. Run supabase/migration_ai_replies.sql (see README) before enabling AI mode.",
+        error: "No bot profile found. Run supabase/migration_ai_replies.sql (see README) before enabling AI mode.",
       });
       return;
     }
