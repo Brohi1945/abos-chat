@@ -54,7 +54,6 @@ export default function CustomerChatScreen({ me, onSignedOut }: CustomerChatScre
             me={me}
             headerTitle="Store"
             headerSubtitle="Usually replies within a few hours"
-            aiMode={conversation.ai_mode}
           />
         ) : (
           <div className="h-full flex items-center justify-center text-xs text-slate-500">Loading chat…</div>
