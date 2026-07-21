@@ -1,25 +1,37 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, Image as ImageIcon, MapPin, Mic, Square, Loader2, ArrowLeft, AlertCircle, ChevronUp } from "lucide-react";
-import { ChatMessage, Profile, Conversation } from "../lib/types";
+import {
+  Send,
+  Image as ImageIcon,
+  MapPin,
+  Mic,
+  Square,
+  Loader2,
+  ArrowLeft,
+  AlertCircle,
+  ChevronUp,
+  Package,
+} from "lucide-react";
+import { ChatMessage, Profile, Conversation, ProductSnapshot } from "../lib/types";
 import {
   listMessages,
   sendMessage,
+  sendProductMessage,
   subscribeToMessages,
   uploadMedia,
   getConversation,
   markConversationRead,
   subscribeToConversation,
+  subscribeToTyping,
 } from "../lib/chatApi";
 import MessageBubble from "./MessageBubble";
+import ProductPicker from "./ProductPicker";
 
 interface ChatWindowProps {
   conversationId: string;
   me: Profile;
   headerTitle: string;
   headerSubtitle?: string;
-  /** Called when mobile back button is tapped (owner inbox only) */
   onBack?: () => void;
-  /** Whether to show the back arrow (mobile owner view) */
   showBackButton?: boolean;
 }
 
@@ -54,15 +66,15 @@ export default function ChatWindow({
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [otherTyping, setOtherTyping] = useState(false);
+  const [showProductPicker, setShowProductPicker] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<BlobPart[]>([]);
-  // Tracks the last message's id so the auto-scroll-to-bottom effect
-  // can tell "a new message arrived at the end" apart from "older
-  // messages were just prepended" — only the former should scroll.
   const lastMessageIdRef = useRef<string | null>(null);
+  const typingApiRef = useRef<ReturnType<typeof subscribeToTyping> | null>(null);
 
   const mergeMessages = (incoming: ChatMessage[]) => {
     setMessages((prev) => {
@@ -86,29 +98,24 @@ export default function ChatWindow({
 
       unsubMessages = subscribeToMessages(conversationId, (msg) => {
         mergeMessages([msg]);
-        // A new message arrived while this window is open — I'm reading
-        // it right now, so immediately bump my own last_read_at too.
         markConversationRead(conversationId, me.role);
       });
       unsubConversation = subscribeToConversation(conversationId, (updated) => setConversation(updated));
 
-      // ---- Belt-and-suspenders polling fallback ----
-      // Realtime *should* deliver everything instantly via the
-      // subscription above, but if it's ever silently down (network
-      // hiccup, a misconfigured project, etc.) this makes sure nothing
-      // is ever missed for more than a few seconds. Only re-fetches the
-      // latest page (not full history) — plenty to catch anything the
-      // realtime channel might have dropped recently.
       pollId = setInterval(async () => {
         const latest = await listMessages(conversationId);
         mergeMessages(latest.messages);
       }, 4000);
     })();
 
+    typingApiRef.current = subscribeToTyping(conversationId, me.role, setOtherTyping);
+
     return () => {
       unsubMessages();
       unsubConversation();
       clearInterval(pollId);
+      typingApiRef.current?.unsubscribe();
+      setOtherTyping(false);
     };
   }, [conversationId]);
 
@@ -138,9 +145,6 @@ export default function ChatWindow({
     setHasMoreOlder(page.hasMore);
     setLoadingOlder(false);
 
-    // Keep the view visually still: after older messages are prepended,
-    // the container grows taller above where the user was looking —
-    // push scrollTop forward by exactly that growth so nothing jumps.
     requestAnimationFrame(() => {
       if (container) {
         const grew = container.scrollHeight - prevScrollHeight;
@@ -154,12 +158,16 @@ export default function ChatWindow({
     setTimeout(() => setErrorMsg(""), 4000);
   };
 
+  const handleTextChange = (value: string) => {
+    setText(value);
+    typingApiRef.current?.setTyping(value.trim().length > 0);
+  };
+
   const handleSendText = async () => {
     const body = text.trim();
     if (!body) return;
     setText("");
-    // AI auto-reply (if ai_mode is on) is now triggered server-side by a
-    // Postgres trigger on insert — nothing to call from the client here.
+    typingApiRef.current?.setTyping(false);
     await sendMessage({ conversationId, senderId: me.id, senderRole: me.role, kind: "text", body });
   };
 
@@ -206,6 +214,11 @@ export default function ChatWindow({
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
+  };
+
+  const handlePickProduct = async (product: ProductSnapshot) => {
+    setShowProductPicker(false);
+    await sendProductMessage(conversationId, me.id, product);
   };
 
   const handleToggleRecording = async () => {
@@ -272,7 +285,9 @@ export default function ChatWindow({
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="relative flex flex-col h-full">
+      {showProductPicker && <ProductPicker onPick={handlePickProduct} onClose={() => setShowProductPicker(false)} />}
+
       {/* Header */}
       <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2 min-w-0">
@@ -287,7 +302,9 @@ export default function ChatWindow({
           )}
           <div className="min-w-0">
             <div className="font-semibold text-sm truncate">{headerTitle}</div>
-            {headerSubtitle && <div className="text-[11px] text-slate-500 truncate">{headerSubtitle}</div>}
+            <div className="text-[11px] text-slate-500 truncate">
+              {otherTyping ? <span className="text-brand">typing…</span> : headerSubtitle}
+            </div>
           </div>
         </div>
         {busy && <Loader2 size={16} className="animate-spin text-slate-500 shrink-0 ml-2" />}
@@ -323,8 +340,6 @@ export default function ChatWindow({
         ) : (
           messages.map((m) => {
             const isMine = m.sender_id === me.id;
-            // "Read" = the OTHER side's last_read_at is at/after this
-            // message's created_at. Only meaningful for messages I sent.
             const otherLastReadAt =
               me.role === "customer" ? conversation?.owner_last_read_at : conversation?.customer_last_read_at;
             const isRead = isMine && !!otherLastReadAt && otherLastReadAt >= m.created_at;
@@ -352,6 +367,15 @@ export default function ChatWindow({
           >
             <MapPin size={17} />
           </button>
+          {me.role === "owner" && (
+            <button
+              onClick={() => setShowProductPicker(true)}
+              className="w-9 h-9 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-800 shrink-0"
+              title="Send product"
+            >
+              <Package size={17} />
+            </button>
+          )}
           <button
             onClick={handleToggleRecording}
             className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
@@ -364,7 +388,7 @@ export default function ChatWindow({
 
           <input
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSendText()}
             placeholder="Message likho…"
             className="flex-1 px-3.5 py-2.5 rounded-full bg-slate-800 border border-slate-700 text-sm focus:outline-none focus:ring-2 focus:ring-brand/50"
