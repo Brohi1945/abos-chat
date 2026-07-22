@@ -1,8 +1,6 @@
-// Shared Groq (OpenAI-compatible) caller for the AI auto-reply feature.
-// Adapted from ABOS's api/_lib/groqClient.js — same retry/backoff
-// behavior, but returns plain text (a chat reply) instead of a
-// JSON action payload, since this bot only replies, it doesn't
-// control UI state.
+// Shared Groq (OpenAI-compatible) caller — now supports tool-calling
+// so the AI can act (add items to an order, confirm it, escalate to a
+// human) instead of only generating plain text.
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
@@ -32,7 +30,13 @@ async function fetchWithTimeout(url, options) {
   }
 }
 
-export async function callGroqChat(systemPrompt, historyMessages) {
+/**
+ * Calls Groq's chat-completions endpoint with the full message history
+ * (including any prior tool calls/results) and an optional list of
+ * tools. Returns the raw assistant message object — {content,
+ * tool_calls} — NOT just text, so the caller can run a tool loop.
+ */
+export async function callGroqAgent(messages, tools) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey) {
     const err = new Error("GROQ_API_KEY is not set in Vercel environment variables");
@@ -40,16 +44,12 @@ export async function callGroqChat(systemPrompt, historyMessages) {
     throw err;
   }
 
-  const chatMessages = [
-    { role: "system", content: systemPrompt },
-    ...(Array.isArray(historyMessages) ? historyMessages : []),
-  ];
-
   const body = JSON.stringify({
     model: "openai/gpt-oss-120b",
-    messages: chatMessages,
-    temperature: 0.6,
-    max_completion_tokens: 400,
+    messages,
+    temperature: 0.4,
+    max_completion_tokens: 700,
+    ...(tools && tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
   });
 
   let lastErr;
@@ -92,7 +92,7 @@ export async function callGroqChat(systemPrompt, historyMessages) {
       throw err;
     }
 
-    return (data?.choices?.[0]?.message?.content || "").trim();
+    return data?.choices?.[0]?.message || null;
   }
 
   const err = new Error("Groq API error after retries");
