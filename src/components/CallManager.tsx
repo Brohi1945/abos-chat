@@ -52,6 +52,35 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const callRowUnsubRef = useRef<() => void>(() => {});
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
 
+  // Ask once, early, so the permission prompt isn't tied to the call
+  // moment itself (that would be too late — permission requests need
+  // to already be resolved before we can show a notification).
+  useEffect(() => {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(() => {});
+    }
+  }, []);
+
+  function notifyIncoming(call: Call, label: string) {
+    if (typeof document === "undefined" || !document.hidden) return; // tab is already visible, banner is enough
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    try {
+      const n = new Notification(`Incoming ${call.kind === "video" ? "video" : "voice"} call`, {
+        body: label,
+        tag: `abos-chat-call-${call.id}`,
+        requireInteraction: true,
+      });
+      n.onclick = () => {
+        window.focus();
+        n.close();
+      };
+    } catch {
+      // Notification constructor can throw on some mobile browsers
+      // (e.g. it's only allowed via a service worker there) — the
+      // in-app ringing banner still works either way, so just skip it.
+    }
+  }
+
   // ---- global incoming-call listener ----
   useEffect(() => {
     const unsub = subscribeToIncomingCalls(me, myConversationId, async (incoming) => {
@@ -65,12 +94,12 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       });
       if (alreadyBusy) return;
       setCall(incoming);
-      if (me.role === "customer") {
-        setPeerLabel("Store");
-      } else {
-        const name = await getProfileName(incoming.caller_id);
-        setPeerLabel(name || "Customer");
+      let label = "Store";
+      if (me.role !== "customer") {
+        label = (await getProfileName(incoming.caller_id)) || "Customer";
       }
+      setPeerLabel(label);
+      notifyIncoming(incoming, label);
     });
     return unsub;
   }, [me.id, myConversationId]);
