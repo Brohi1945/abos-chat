@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect } from "react";
 import { Phone, PhoneOff, Video } from "lucide-react";
 import { Call } from "../lib/types";
 
@@ -9,37 +9,45 @@ interface IncomingCallBannerProps {
   onDecline: () => void;
 }
 
-/** Lightweight ringtone — a soft two-tone beep looped via Web Audio,
- *  no audio file needed. Stops automatically when the banner unmounts. */
+/** Ringtone — a classic "ring-ring… pause…" double-pulse pattern, like
+ *  an actual phone call, looped via Web Audio (no audio file needed).
+ *  Also vibrates the device in sync, on browsers that support it.
+ *  Both stop automatically when the banner unmounts. */
 function useRingtone() {
-  const ctxRef = useRef<AudioContext | null>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
   useEffect(() => {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
-    ctxRef.current = ctx;
+    const ctx = AudioCtx ? new AudioCtx() : null;
 
-    const beep = () => {
+    const playTone = (startOffset: number, duration: number) => {
+      if (!ctx) return;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.frequency.value = 880;
-      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.35);
+      osc.frequency.value = 950;
+      const start = ctx.currentTime + startOffset;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.3, start + 0.05);
+      gain.gain.setValueAtTime(0.3, start + duration - 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.35);
+      osc.start(start);
+      osc.stop(start + duration);
     };
 
-    beep();
-    intervalRef.current = setInterval(beep, 1500);
+    const RING_CYCLE_MS = 3000;
+    const ringCycle = () => {
+      playTone(0, 0.4);
+      playTone(0.5, 0.4);
+      if (navigator.vibrate) navigator.vibrate([400, 100, 400]);
+    };
+
+    ringCycle();
+    const interval = setInterval(ringCycle, RING_CYCLE_MS);
 
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      ctx.close().catch(() => {});
+      clearInterval(interval);
+      ctx?.close().catch(() => {});
+      navigator.vibrate?.(0);
     };
   }, []);
 }
