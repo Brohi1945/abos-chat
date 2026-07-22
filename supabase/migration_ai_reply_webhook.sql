@@ -19,6 +19,17 @@
 -- SQL Editor (or keep them out of version control entirely and only
 -- ever run this section by hand). Everything else in this file is
 -- safe to commit as-is.
+--
+-- 2026-07-22 update: two fixes based on production testing —
+--  1. timeout_milliseconds was left at pg_net's default of 5000ms.
+--     Groq's tool-calling loop can legitimately take longer than 5s,
+--     so pg_net was marking the call "timed out" even though the
+--     Vercel function kept running and inserted the reply late. Raised
+--     to 25000ms (still well under /api/groq-reply's maxDuration).
+--  2. Now passes the new message's id in the webhook body, so the
+--     handler can debounce (see api/groq-reply.js) instead of using a
+--     blanket "skip if we replied in the last 20s" rule that silently
+--     dropped fast follow-up messages forever.
 
 create extension if not exists pg_net with schema extensions;
 
@@ -71,7 +82,12 @@ begin
       'Content-Type', 'application/json',
       'x-abos-chat-webhook-secret', webhook_secret
     ),
-    body := jsonb_build_object('conversationId', new.conversation_id)
+    body := jsonb_build_object(
+      'conversationId', new.conversation_id,
+      'messageId', new.id,
+      'messageCreatedAt', new.created_at
+    ),
+    timeout_milliseconds := 25000
   );
 
   return new;
