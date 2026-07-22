@@ -38,7 +38,11 @@ export function createPeerConnection(callbacks: PeerCallbacks): RTCPeerConnectio
 
 export async function getLocalStream(kind: CallKind): Promise<MediaStream> {
   return navigator.mediaDevices.getUserMedia({
-    audio: true,
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
     video: kind === "video" ? { facingMode: "user" } : false,
   });
 }
