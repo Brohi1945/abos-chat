@@ -1,5 +1,5 @@
 // POST /api/groq-reply
-// Body: { conversationId: string }
+// Body: { conversationId: string, messageId?: string }
 // Header: x-abos-chat-webhook-secret: <shared secret>
 //
 // Called by a Postgres trigger (see supabase/migration_ai_reply_webhook.sql)
@@ -13,10 +13,34 @@ import { supabaseServer } from "./_lib/supabaseServer.js";
 import { callGroqAgent } from "./_lib/groqClient.js";
 import { TOOLS, executeTool } from "./_lib/aiAgentTools.js";
 
+// Vercel: this handler can genuinely need 10-20s (Groq + up to 4 tool
+// round-trips). Without this, Vercel's default duration limit can kill
+// the function mid-reply, which used to look like "no reply at all."
+export const config = {
+  maxDuration: 30,
+};
+
 const BOT_NAME = "ABOS Assistant";
-const MIN_SECONDS_BETWEEN_AI_REPLIES = 20;
 const MAX_PRODUCTS_IN_CONTEXT = 20;
 const MAX_TOOL_ITERATIONS = 4;
+
+// How long we wait before actually calling Groq, to let a burst of
+// quick customer messages ("Hi" / "I want" / "5kg rice") settle down
+// into one reply instead of several. If a newer customer message shows
+// up during this wait, THIS invocation backs off — the newer message's
+// own trigger call will handle everything (it always pulls the last 12
+// messages, so nothing is lost, it just gets answered once, by the
+// invocation that's actually looking at the final message).
+const DEBOUNCE_MS = 2500;
+
+// Hard wall-clock budget for the whole tool-calling loop, kept safely
+// under maxDuration above so we always have time left to insert
+// whatever reply we've got instead of getting killed mid-flight.
+const OVERALL_TIME_BUDGET_MS = 24000;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function buildSystemPrompt(products, draftItems) {
   const inventoryBlock =
@@ -60,6 +84,8 @@ export default async function handler(req, res) {
     return;
   }
 
+  const startedAt = Date.now();
+
   try {
     const expectedSecret = process.env.AI_REPLY_WEBHOOK_SECRET;
     if (!expectedSecret) {
@@ -72,13 +98,35 @@ export default async function handler(req, res) {
       return;
     }
 
-    const { conversationId } = req.body || {};
+    const { conversationId, messageId } = req.body || {};
     if (!conversationId) {
       res.status(400).json({ error: "conversationId is required" });
       return;
     }
 
     const supabase = supabaseServer();
+
+    // --- Debounce instead of the old "skip if we replied recently" rate
+    // limit. That old check silently dropped the customer's message
+    // forever if it landed within 20s of our last reply. This instead
+    // waits a moment, then only proceeds if nothing newer has arrived.
+    if (messageId) {
+      await sleep(DEBOUNCE_MS);
+      const { data: latestCustomerMsg } = await supabase
+        .from("abos_chat_messages")
+        .select("id")
+        .eq("conversation_id", conversationId)
+        .eq("sender_role", "customer")
+        .eq("kind", "text")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (latestCustomerMsg && latestCustomerMsg.id !== messageId) {
+        res.status(200).json({ skipped: true, reason: "superseded by a newer customer message" });
+        return;
+      }
+    }
 
     const { data: conversation, error: convoErr } = await supabase
       .from("abos_chat_conversations")
@@ -95,33 +143,17 @@ export default async function handler(req, res) {
       return;
     }
 
-    const since = new Date(Date.now() - MIN_SECONDS_BETWEEN_AI_REPLIES * 1000).toISOString();
-
-    const [{ data: recentAiReply }, { data: recentMessages }, { data: products }, { data: draftRow }, { data: customer }] =
-      await Promise.all([
-        supabase
-          .from("abos_chat_messages")
-          .select("id")
-          .eq("conversation_id", conversationId)
-          .eq("is_ai", true)
-          .gte("created_at", since)
-          .limit(1)
-          .maybeSingle(),
-        supabase
-          .from("abos_chat_messages")
-          .select("sender_role, kind, body, created_at")
-          .eq("conversation_id", conversationId)
-          .order("created_at", { ascending: false })
-          .limit(12),
-        supabase.from("products").select("name, category, price, stock, reserved_stock").order("name").limit(MAX_PRODUCTS_IN_CONTEXT),
-        supabase.from("abos_chat_ai_drafts").select("items").eq("conversation_id", conversationId).maybeSingle(),
-        supabase.from("abos_chat_profiles").select("id, name, email, customer_number").eq("id", conversation.customer_id).maybeSingle(),
-      ]);
-
-    if (recentAiReply) {
-      res.status(200).json({ skipped: true, reason: "rate limited" });
-      return;
-    }
+    const [{ data: recentMessages }, { data: products }, { data: draftRow }, { data: customer }] = await Promise.all([
+      supabase
+        .from("abos_chat_messages")
+        .select("sender_role, kind, body, created_at")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false })
+        .limit(12),
+      supabase.from("products").select("name, category, price, stock, reserved_stock").order("name").limit(MAX_PRODUCTS_IN_CONTEXT),
+      supabase.from("abos_chat_ai_drafts").select("items").eq("conversation_id", conversationId).maybeSingle(),
+      supabase.from("abos_chat_profiles").select("id, name, email, customer_number").eq("id", conversation.customer_id).maybeSingle(),
+    ]);
 
     const history = (recentMessages || [])
       .reverse()
@@ -139,8 +171,14 @@ export default async function handler(req, res) {
 
     let confirmedOrder = null;
     let finalText = "";
+    let ranOutOfTime = false;
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
+      if (Date.now() - startedAt > OVERALL_TIME_BUDGET_MS) {
+        ranOutOfTime = true;
+        break;
+      }
+
       const assistantMsg = await callGroqAgent(messages, TOOLS);
       if (!assistantMsg) break;
 
@@ -168,6 +206,24 @@ export default async function handler(req, res) {
           }
         );
         messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(result) });
+      }
+    }
+
+    // If we ran out of time mid-loop and never got a text reply, don't
+    // leave the customer with total silence — send a short holding
+    // message and flag the conversation for a human to check.
+    if (ranOutOfTime && !finalText && !confirmedOrder) {
+      finalText = "Ek second lagega — main abhi check kar ke aap ko batata hoon. Team member bhi jald follow up karega.";
+      try {
+        const { data: convo } = await supabase
+          .from("abos_chat_conversations")
+          .select("tags")
+          .eq("id", conversationId)
+          .maybeSingle();
+        const tags = Array.from(new Set([...(convo?.tags || []), "ai-timeout"]));
+        await supabase.from("abos_chat_conversations").update({ status: "pending", tags }).eq("id", conversationId);
+      } catch {
+        // best-effort tagging only, don't block the reply on this
       }
     }
 
