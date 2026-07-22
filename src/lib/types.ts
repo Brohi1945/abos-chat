@@ -43,7 +43,7 @@ export interface OwnerInboxRow {
   unread_count: number;
 }
 
-export type MessageKind = "text" | "image" | "location" | "voice" | "product" | "call";
+export type MessageKind = "text" | "image" | "location" | "voice" | "product" | "call" | "order";
 
 export type CallKind = "voice" | "video";
 export type CallStatus = "ringing" | "active" | "ended" | "missed" | "declined";
@@ -73,6 +73,24 @@ export interface ProductSnapshot {
   category: string | null;
 }
 
+/** A single line item inside an AI-placed order — snapshotted at
+ *  confirm time (same pattern as ProductSnapshot). */
+export interface OrderItem {
+  product_id: string;
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+/** Rendered as a rich "order confirmed" card in the chat once the AI
+ *  agent finalizes an order via the confirm_order tool. */
+export interface OrderSnapshot {
+  order_id: string;
+  items: OrderItem[];
+  total: number;
+  status: string;
+}
+
 export interface ChatMessage {
   id: string;
   conversation_id: string;
@@ -85,6 +103,7 @@ export interface ChatMessage {
   lng: number | null;
   is_ai: boolean;
   product_snapshot: ProductSnapshot | null;
+  order_snapshot: OrderSnapshot | null;
   // Snapshot of who on the store side actually sent this (owner vs a
   // named agent) — null for customer messages and for AI replies.
   sender_name: string | null;
