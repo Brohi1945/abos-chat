@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Video, VideoOff, PhoneOff, User } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, PhoneOff, User, Volume2 } from "lucide-react";
 import { Call } from "../lib/types";
 
 interface CallScreenProps {
@@ -51,15 +51,35 @@ export default function CallScreen({
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const elapsed = useElapsedSeconds(phase === "active" ? call.answered_at : null);
   const isVideo = call.kind === "video";
+  // By the time the WebRTC offer/answer/ICE dance finishes and a remote
+  // track actually arrives, the original "Accept" tap's user-gesture
+  // window has usually expired — browsers then silently block
+  // audio/video.play() rather than erroring, so the call looks
+  // "connected" but nothing is heard. Try to play automatically; if
+  // blocked, surface a one-tap button (a fresh click always satisfies
+  // the gesture requirement).
+  const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
 
   useEffect(() => {
     if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
   }, [localStream]);
 
   useEffect(() => {
-    if (isVideo && remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-    if (!isVideo && remoteAudioRef.current) remoteAudioRef.current.srcObject = remoteStream;
+    const el = isVideo ? remoteVideoRef.current : remoteAudioRef.current;
+    if (!el) return;
+    el.srcObject = remoteStream;
+    if (!remoteStream) return;
+    el.play()
+      .then(() => setNeedsAudioUnlock(false))
+      .catch(() => setNeedsAudioUnlock(true));
   }, [remoteStream, isVideo]);
+
+  const unlockAudio = () => {
+    const el = isVideo ? remoteVideoRef.current : remoteAudioRef.current;
+    el?.play()
+      .then(() => setNeedsAudioUnlock(false))
+      .catch(() => {});
+  };
 
   return (
     <div className="fixed inset-0 z-[70] bg-slate-950 flex flex-col">
@@ -104,6 +124,16 @@ export default function CallScreen({
           <div className="absolute top-4 left-4 bg-black/40 rounded-full px-3 py-1.5 text-xs font-medium">
             {peerLabel} · {phase === "outgoing" ? "Ringing…" : formatDuration(elapsed)}
           </div>
+        )}
+
+        {needsAudioUnlock && (
+          <button
+            onClick={unlockAudio}
+            className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-amber-500 text-slate-900 text-xs font-semibold px-4 py-2 rounded-full shadow-lg animate-pulse"
+          >
+            <Volume2 size={14} />
+            Awaz start karne ke liye tap karo
+          </button>
         )}
       </div>
 
