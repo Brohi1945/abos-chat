@@ -79,26 +79,29 @@ export default async function handler(req, res) {
     }
 
     const since = new Date(Date.now() - MIN_SECONDS_BETWEEN_AI_REPLIES * 1000).toISOString();
-    const { data: recentAiReply } = await supabase
-      .from("abos_chat_messages")
-      .select("id")
-      .eq("conversation_id", conversationId)
-      .eq("is_ai", true)
-      .gte("created_at", since)
-      .limit(1)
-      .maybeSingle();
+
+    const [{ data: recentAiReply }, { data: recentMessages }, { data: products }] = await Promise.all([
+      supabase
+        .from("abos_chat_messages")
+        .select("id")
+        .eq("conversation_id", conversationId)
+        .eq("is_ai", true)
+        .gte("created_at", since)
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("abos_chat_messages")
+        .select("sender_role, kind, body, created_at")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: false })
+        .limit(12),
+      supabase.from("products").select("name, category, price, stock").order("name").limit(MAX_PRODUCTS_IN_CONTEXT),
+    ]);
 
     if (recentAiReply) {
       res.status(200).json({ skipped: true, reason: "rate limited" });
       return;
     }
-
-    const { data: recentMessages } = await supabase
-      .from("abos_chat_messages")
-      .select("sender_role, kind, body, created_at")
-      .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: false })
-      .limit(12);
 
     const history = (recentMessages || [])
       .reverse()
@@ -115,12 +118,6 @@ export default async function handler(req, res) {
     // could instead filter by keyword match against the latest
     // customer message — flagged as a follow-up if the catalog grows
     // past a size where sending it all every time gets expensive.
-    const { data: products } = await supabase
-      .from("products")
-      .select("name, category, price, stock")
-      .order("name")
-      .limit(MAX_PRODUCTS_IN_CONTEXT);
-
     const systemPrompt = buildSystemPrompt(products || []);
 
     const reply = await callGroqChat(systemPrompt, history);
