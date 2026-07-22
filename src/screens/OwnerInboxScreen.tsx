@@ -256,23 +256,26 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
       <div className={`flex-1 min-w-0 flex flex-col ${mobileShowList ? "hidden md:flex" : "flex"}`}>
         {selected ? (
           <>
-            <div className="px-4 py-2 border-b border-slate-800 flex items-center justify-between gap-3 bg-slate-900/50">
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 min-w-0 shrink-0">
-                <Bot size={13} className="shrink-0" />
-                <span className="truncate">AI auto-reply</span>
-              </div>
-              <button
-                onClick={handleToggleAi}
-                className={`relative w-9 h-5 rounded-full transition shrink-0 ${
-                  selected.ai_mode ? "bg-brand" : "bg-slate-700"
-                }`}
-              >
-                <span
-                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                    selected.ai_mode ? "translate-x-4" : "translate-x-0.5"
+            <div className="px-3 py-2 border-b border-slate-800 flex flex-wrap items-center gap-2 bg-slate-900/50">
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  onClick={handleToggleAi}
+                  className={`relative w-9 h-5 rounded-full transition shrink-0 ${
+                    selected.ai_mode ? "bg-brand" : "bg-slate-700"
                   }`}
-                />
-              </button>
+                  aria-label="Toggle AI auto-reply"
+                >
+                  <span
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                      selected.ai_mode ? "translate-x-4" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+                <div className="flex items-center gap-1 text-[11px] text-slate-400">
+                  <Bot size={13} className="shrink-0" />
+                  <span className="hidden xs:inline whitespace-nowrap">AI auto-reply</span>
+                </div>
+              </div>
 
               <input
                 value={tagDraft}
@@ -280,7 +283,7 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
                 onBlur={handleSaveTags}
                 onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
                 placeholder="Tags (comma se separate)…"
-                className="flex-1 min-w-0 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand/50"
+                className="flex-1 basis-32 min-w-0 px-2.5 py-1 rounded-full bg-slate-800 border border-slate-700 text-[11px] focus:outline-none focus:ring-2 focus:ring-brand/50"
               />
             </div>
 
