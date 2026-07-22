@@ -345,15 +345,15 @@ export default function ChatWindow({
       {showProductPicker && <ProductPicker onPick={handlePickProduct} onClose={() => setShowProductPicker(false)} />}
 
       {/* Header */}
-      <div className="px-4 py-3 border-b border-slate-800 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="px-2.5 sm:px-4 py-2.5 border-b border-slate-800 flex items-center justify-between shrink-0 gap-1">
+        <div className="flex items-center gap-1.5 min-w-0">
           {showBackButton && onBack && (
             <button
               onClick={onBack}
-              className="md:hidden w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-800 shrink-0"
+              className="md:hidden w-7 h-7 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-800 shrink-0"
               aria-label="Back"
             >
-              <ArrowLeft size={18} />
+              <ArrowLeft size={17} />
             </button>
           )}
           <div className="min-w-0">
@@ -363,26 +363,26 @@ export default function ChatWindow({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 shrink-0 ml-2">
+        <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0">
           <button
             onClick={() => handleStartCall("voice")}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-800"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-800 shrink-0"
             aria-label="Voice call"
           >
-            <Phone size={16} />
+            <Phone size={15} />
           </button>
           <button
             onClick={() => handleStartCall("video")}
-            className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-800"
+            className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-slate-400 hover:bg-slate-800 shrink-0"
             aria-label="Video call"
           >
-            <Video size={16} />
+            <Video size={15} />
           </button>
           {me.role !== "customer" && conversation && (
             <select
               value={conversation.status}
               onChange={(e) => handleStatusChange(e.target.value as ConversationStatus)}
-              className={`text-[11px] font-semibold rounded-full px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-brand/50 ${
+              className={`max-w-[76px] sm:max-w-none text-[10px] sm:text-[11px] font-semibold rounded-full pl-2 pr-1 sm:px-2 py-1 border-0 focus:outline-none focus:ring-2 focus:ring-brand/50 shrink-0 ${
                 STATUS_OPTIONS.find((s) => s.value === conversation.status)?.className || "bg-slate-800 text-slate-300"
               }`}
             >
