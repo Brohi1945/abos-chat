@@ -1,5 +1,5 @@
 import React from "react";
-import { MapPin, ExternalLink, Check, CheckCheck, Package, Phone, Video, PhoneMissed } from "lucide-react";
+import { MapPin, ExternalLink, Check, CheckCheck, Package, Phone, Video, PhoneMissed, ShoppingBag } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 
 interface MessageBubbleProps {
@@ -146,6 +146,42 @@ export default function MessageBubble({ message, isMine, isRead }: MessageBubble
               </span>
             </div>
             {message.body && <div className="px-3.5 pb-2.5 text-sm">{message.body}</div>}
+          </div>
+        )}
+
+        {message.kind === "order" && message.order_snapshot && (
+          <div className="w-full max-w-[260px]">
+            <div className="flex items-center gap-2 px-3.5 pt-2.5">
+              <div
+                className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                  isMine ? "bg-white/20" : "bg-emerald-500/20 text-emerald-400"
+                }`}
+              >
+                <ShoppingBag size={16} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-semibold">Order {message.order_snapshot.order_id}</div>
+                <div className={`text-[10px] ${isMine ? "text-white/70" : "text-slate-400"}`}>
+                  {message.order_snapshot.status === "pending"
+                    ? "Confirmed · pending fulfillment"
+                    : message.order_snapshot.status}
+                </div>
+              </div>
+            </div>
+            <div className="px-3.5 pt-2 pb-1 space-y-0.5">
+              {message.order_snapshot.items.map((item, i) => (
+                <div key={i} className="flex justify-between text-xs">
+                  <span className="truncate">
+                    {item.quantity}x {item.name}
+                  </span>
+                  <span className="shrink-0 ml-2">Rs {item.price * item.quantity}</span>
+                </div>
+              ))}
+            </div>
+            <div className="px-3.5 pb-2.5 pt-1 border-t border-white/10 flex justify-between text-xs font-semibold">
+              <span>Total</span>
+              <span>Rs {message.order_snapshot.total}</span>
+            </div>
           </div>
         )}
 
