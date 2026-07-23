@@ -1,41 +1,53 @@
 // ============================================================
 //  src/lib/webrtc.ts
-//  WebRTC peer connection + media helpers.
-//  PHASE 1: TURN server support added (via environment variables).
-//  PHASE 1: ICE restart callbacks prepared (actual logic lives in
-//  CallManager.tsx, but the callback hook is exposed here).
+//  PHASE 1 + DYNAMIC TURN CREDENTIALS (from metered.ca)
+//  Fetches fresh TURN credentials before every call.
+//  No static credentials stored in code or env.
 // ============================================================
 
 import { CallKind } from "./types";
 
-// Google STUN servers — free, reliable for most home/mobile networks
-const STUN_SERVERS: RTCIceServer[] = [
+// Fallback STUN servers (used if TURN fetch fails)
+const FALLBACK_STUN: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
 /**
- * Builds the full ICE server list.
- * If TURN credentials are present in environment variables, they are added.
- * TURN URL format: "turn:your-turn-server.com:3478" or "turns:..." for TLS.
+ * Fetches fresh, time-limited TURN credentials from our Vercel endpoint.
+ * This endpoint calls metered.ca internally, so the browser never
+ * sees the raw API key.
+ * 
+ * Credentials are valid for 24 hours by default.
  */
-function getIceServers(): RTCIceServer[] {
-  const servers: RTCIceServer[] = [...STUN_SERVERS];
-
-  // Read TURN config from environment (VITE_ prefix because it's used in the browser)
-  const turnUrl = import.meta.env.VITE_TURN_URL;
-  const turnUsername = import.meta.env.VITE_TURN_USERNAME;
-  const turnCredential = import.meta.env.VITE_TURN_CREDENTIAL;
-
-  if (turnUrl && turnUsername && turnCredential) {
-    servers.push({
-      urls: turnUrl,
-      username: turnUsername,
-      credential: turnCredential,
-    });
+async function fetchTurnServers(): Promise<RTCIceServer[]> {
+  try {
+    const response = await fetch("/api/turn-credentials");
+    
+    if (!response.ok) {
+      console.warn("Failed to fetch TURN credentials, falling back to STUN only");
+      return [...FALLBACK_STUN];
+    }
+    
+    const data = await response.json();
+    
+    if (data.iceServers && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+      return data.iceServers;
+    }
+    
+    return [...FALLBACK_STUN];
+  } catch (err) {
+    console.warn("Error fetching TURN credentials:", err);
+    return [...FALLBACK_STUN];
   }
+}
 
-  return servers;
+/**
+ * Builds the full ICE server list dynamically.
+ * This is ASYNC — call it before creating the peer connection.
+ */
+export async function getIceServers(): Promise<RTCIceServer[]> {
+  return await fetchTurnServers();
 }
 
 export interface PeerCallbacks {
@@ -57,14 +69,18 @@ export interface PeerCallbacks {
 }
 
 /**
- * Creates a new RTCPeerConnection with the configured ICE servers
- * (STUN + optional TURN) and wires up all callbacks.
+ * Creates a new RTCPeerConnection with DYNAMIC TURN credentials.
+ * Must be called with `await` because it fetches credentials first.
  */
-export function createPeerConnection(callbacks: PeerCallbacks): RTCPeerConnection {
+export async function createPeerConnection(
+  callbacks: PeerCallbacks
+): Promise<RTCPeerConnection> {
+  const iceServers = await getIceServers();
+
   const pc = new RTCPeerConnection({
-    iceServers: getIceServers(),
-    // Optional: if you want to configure additional ICE settings
-    // iceTransportPolicy: "all", // "relay" forces TURN-only (debugging)
+    iceServers,
+    // Optionally force TURN only for testing (uncomment to debug):
+    // iceTransportPolicy: "relay",
   });
 
   // Forward ICE candidates to the signaling channel
@@ -100,8 +116,7 @@ export function createPeerConnection(callbacks: PeerCallbacks): RTCPeerConnectio
 
 /**
  * Acquires local audio (and optionally video) stream.
- * PHASE 2 will add HD resolution constraints here — for now we keep
- * it as-is to avoid breaking existing behaviour.
+ * PHASE 2 will add HD resolution constraints here.
  */
 export async function getLocalStream(kind: CallKind): Promise<MediaStream> {
   const constraints: MediaStreamConstraints = {
