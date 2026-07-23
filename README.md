@@ -38,6 +38,12 @@ Standalone messaging app for ABOS customers — separate repo, **same Supabase p
 - **Call log messages** — every call drops a summary bubble into the chat ("Voice call · 2:15", "Missed video call")
 - **STUN-only** — no TURN server included yet (see Known limitations)
 
+**Phase 6 — Theming & floating admin AI assistant**
+- **3 themes — Light / Dark / Colorful** — CSS-variable-driven (`src/theme/`), wired through Tailwind so no component hardcodes a color. A small `ThemeSwitcher` is on the Auth screen, the customer chat header, and the owner inbox header — **both customer and admin can set their own theme independently**, stored per-device (`localStorage`), synced across tabs.
+- **Floating admin AI assistant ("ABI")** — a floating bubble on the Owner Inbox screen; tap to open a full chat panel. Text or voice (Web Speech API — mic input + spoken replies). Can, on the admin's command: send a reply in the selected conversation, toggle AI auto-reply, change status/tags, filter the inbox, jump to a different conversation by name/number, and draft a broadcast (drafts only — **never sends on its own**, the admin still taps Send by hand). Every action it takes is the same RLS-protected call the admin's own UI already uses, so it can't do anything the signed-in admin couldn't already do manually.
+- **Voice/theme commands handled locally** — phrases like "dark mode laga do" or "voice band karo" are matched client-side (`voiceCommands.ts`) instead of round-tripping to the LLM, so they're instant and don't cost an API call.
+- New endpoint `/api/admin-chat` — owner **or agent**-authenticated (`verifyStaff` in `verifyOwner.js`), calls Groq (reuses the existing `GROQ_API_KEY`, no new secret needed).
+
 ## Setup
 
 ### 1. Run the SQL migrations, in this exact order
@@ -53,7 +59,7 @@ Open your ABOS Supabase project → **SQL Editor** → paste each file's content
 7. `supabase/migration_phase4_team_scale.sql` — agent role, status/tags, broadcasts, search
 8. `supabase/migration_phase5_calling.sql` — calls table, realtime publication, call log message kind
 
-All files are idempotent — safe to re-run if you're not sure what's already applied.
+All files are idempotent — safe to re-run if you're not sure what's already applied. Phase 6 (theming + admin assistant) is frontend/API-only — no new migration needed.
 
 ### 2. Environment variables
 
@@ -65,8 +71,8 @@ Fill in the **same** `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` that ABOS 
 
 Set `VITE_OWNER_EMAILS` to the email(s) that should see the owner inbox before their DB role is flipped (comma-separated if more than one) — this is a UI convenience only, actual access is enforced by RLS via `abos_chat_profiles.role`.
 
-For AI auto-reply, also set:
-- `GROQ_API_KEY`
+For AI auto-reply (customer bot) **and** the admin AI assistant, also set:
+- `GROQ_API_KEY` — shared by both `/api/groq-reply.js` (customer bot) and `/api/admin-chat.js` (admin assistant); no separate key needed
 - `SUPABASE_SERVICE_ROLE_KEY` — server-only, read by `/api/groq-reply.js`, never shipped to the browser
 
 ### 3. Install & run
@@ -76,6 +82,8 @@ npm install
 npm run dev
 ```
 
+(`npm install` picks up `react-hot-toast`, added for the admin assistant's toast notifications and the shared `toast.ts` helper.)
+
 ### 4. Make yourself the owner, and add staff/agents
 
 ```sql
@@ -83,7 +91,7 @@ update abos_chat_profiles set role = 'owner' where email = 'owner@example.com';
 update abos_chat_profiles set role = 'agent' where email = 'staff@example.com';
 ```
 
-Both `owner` and `agent` see the same shared Inbox (fine-grained per-agent permissions is a later phase). Log out and back in after changing a role — the RLS helper function is re-evaluated on the next session.
+Both `owner` and `agent` see the same shared Inbox and the same floating AI assistant (fine-grained per-agent permissions is a later phase). Log out and back in after changing a role — the RLS helper function is re-evaluated on the next session.
 
 ## Deploy
 
@@ -102,13 +110,14 @@ A tighter integration (single sign-on, auto-creating a conversation from an ABOS
 ```
 abos-chat/
 ├── api/
-│   ├── groq-reply.js                 # POST — generates + inserts an AI reply if ai_mode is on
-│   ├── api/customer-orders.js        # GET — owner-only, best-effort orders for a conversation's customer
+│   ├── groq-reply.js                 # POST — generates + inserts an AI reply if ai_mode is on (customer-facing bot)
+│   ├── admin-chat.js                 # POST — owner/agent-only, backs the floating admin AI assistant
+│   ├── customer-orders.js            # GET — owner-only, best-effort orders for a conversation's customer
 │   └── _lib/
 │       ├── supabaseServer.js         # Service-role Supabase client (server-only)
-│       ├── groqClient.js             # Groq caller with retry/backoff
+│       ├── groqClient.js             # Groq caller with retry/backoff — shared by groq-reply.js and admin-chat.js
 │       ├── verifyCaller.js           # Verifies the calling user's access token
-│       └── verifyOwner.js            # Verifies the caller is owner/agent
+│       └── verifyOwner.js            # verifyOwner (owner-only) + verifyStaff (owner OR agent, used by admin-chat.js)
 ├── supabase/
 │   ├── schema.sql                    # 1. Run first
 │   ├── migration_ai_replies.sql      # 2.
@@ -120,27 +129,44 @@ abos-chat/
 ├── 1 supabase/
 │   └── migration_phase2_3_foundation.sql # 6. Unread counts, product snapshots
 ├── src/
+│   ├── theme/
+│   │   ├── colors.ts                 # Raw color values for light/dark/colorful (JS-side source of truth)
+│   │   ├── tokens.css                # Same palettes as CSS variables — what Tailwind actually reads
+│   │   ├── ThemeProvider.tsx         # React context: current theme + setTheme/cycleTheme, persisted per-device
+│   │   └── index.ts                  # Barrel export
 │   ├── lib/
 │   │   ├── supabaseClient.ts         # Supabase client + owner email list
 │   │   ├── types.ts                  # Profile / Conversation / ChatMessage / Call types
 │   │   ├── chatApi.ts                # All auth + conversation + message + storage + broadcast/search calls
 │   │   ├── callApi.ts                # Call lifecycle (ring/claim/end) + WebRTC signaling relay
-│   │   └── webrtc.ts                 # RTCPeerConnection + getUserMedia helpers
+│   │   ├── webrtc.ts                 # RTCPeerConnection + getUserMedia helpers
+│   │   ├── toast.ts                  # Shared toast helper, styled from theme tokens
+│   │   ├── useVoiceInput.ts          # Speech-to-text hook (Web Speech API), used by the admin assistant
+│   │   ├── useVoiceOutput.ts         # Text-to-speech hook, with retry/watchdog for flaky mobile TTS
+│   │   ├── voiceCommands.ts          # Local detection of theme-switch / voice-toggle spoken commands
+│   │   └── adminAssistantApi.ts      # Calls /api/admin-chat, parses {reply, action} JSON replies
 │   ├── components/
 │   │   ├── MessageBubble.tsx         # Renders text/image/location/voice/product/call + sender badge
 │   │   ├── ChatWindow.tsx            # Message list + composer + status dropdown + call buttons
 │   │   ├── ProductPicker.tsx         # Owner's "send product" search picker
 │   │   ├── OrderContextPanel.tsx     # Linked ABOS orders panel
-│   │   ├── BroadcastComposer.tsx     # Broadcast/campaign message modal
+│   │   ├── BroadcastComposer.tsx     # Broadcast/campaign message modal (also accepts an AI-drafted prefill)
+│   │   ├── ThemeSwitcher.tsx         # Light/Dark/Colorful 3-way toggle, used by both customer and admin screens
+│   │   ├── AdminAssistant.tsx        # Floating AI assistant ("ABI") — bubble + full chat panel, voice in/out
 │   │   ├── CallManager.tsx           # App-root call state machine (mounted once, provides useCall())
-│   │   ├── CallScreen.tsx            # Full-screen active/outgoing call UI
+│   │   ├── CallScreen.tsx            # Full-screen active/outgoing call UI (intentionally theme-independent/dark)
 │   │   └── IncomingCallBanner.tsx    # Ringing banner with accept/decline
 │   ├── screens/
 │   │   ├── AuthScreen.tsx            # Signup / login
 │   │   ├── CustomerChatScreen.tsx    # Customer's single chat with the store
-│   │   └── OwnerInboxScreen.tsx      # Store side: conversation list, search, status filters, broadcast
+│   │   └── OwnerInboxScreen.tsx      # Store side: conversation list, search, status filters, broadcast, AI assistant
 │   └── App.tsx                       # Auth gate, routes to customer or owner/agent screen
 ```
+
+## Recent fixes (2026-07-23)
+
+- **`api/customer-orders.js` route bug fixed** — the file was previously nested at `api/api/customer-orders.js`, which Vercel routed to `/api/api/customer-orders`. The frontend (`chatApi.ts`) always called `/api/customer-orders`, so the "linked orders" panel would have silently 404'd in production. Moved to the correct path.
+- **All hardcoded colors removed** — every screen/component previously hardcoded a single dark `slate-*` palette (couldn't be themed at all). Replaced with CSS-variable-backed Tailwind tokens (`bg-app`, `bg-surface`, `text-fg`, `text-muted`, `bg-brand`, `bg-accent`, `bg-success`, `bg-danger`, `bg-warning`) across `App.tsx`, `AuthScreen.tsx`, `CustomerChatScreen.tsx`, `OwnerInboxScreen.tsx`, `ChatWindow.tsx`, `MessageBubble.tsx`, `OrderContextPanel.tsx`, `ProductPicker.tsx`, `BroadcastComposer.tsx`, `IncomingCallBanner.tsx`, and `CallManager.tsx`. `CallScreen.tsx` was left dark on purpose (standard always-dark video-call UX).
 
 ## Recent fixes (2026-07-22)
 
@@ -163,13 +189,16 @@ Found via live testing + inspecting `net._http_response` logs in Supabase and Ve
 - **No message edit/delete** — planned for a later phase.
 - **No document attachments** (PDF etc.) — only images/voice currently. Planned for a later phase.
 - **No chat transcript export** — planned for a later phase.
-- **Agents have the same full access as owner** — no per-agent permission levels (e.g. can't restrict an agent to only certain conversations) yet.
+- **Agents have the same full access as owner** — no per-agent permission levels (e.g. can't restrict an agent to only certain conversations) yet. This also applies to the admin AI assistant — any agent can use it to act on any conversation.
 - **No agent invite flow** — promoting someone to `agent`/`owner` is a manual SQL update after they sign up once; no in-app "invite teammate" UI yet.
 - **Broadcast has no delivery/read tracking beyond `recipient_count`** — no per-recipient read status for broadcast messages specifically.
 - **AI auto-reply is per-conversation only, no global default.**
 - **AI reply debounce isn't a hard lock** — in the rare case two customer messages land at almost the exact same millisecond, both trigger invocations could theoretically pass the "still latest" check and both call Groq. Very unlikely in practice; a stronger fix would be a proper per-conversation lock (e.g. an `ai_reply_in_progress` column with an expiry) — noted here as a possible future hardening, not done yet.
 - **AI only reacts to text messages**, not images/location/voice notes.
 - **No admin auth hardening beyond RLS** — owner/agent is a flag on the profile row, protected by Postgres RLS. Fine for a small team; would want tighter checks at larger scale.
+- **Theme choice is per-device, not per-account** — stored in `localStorage`, so signing in on a new device/browser starts back at the system default rather than remembering a previously chosen theme. Syncing it to the profile row is a small later addition if wanted.
+- **Admin assistant has no server-side tool-calling loop** — it proposes one action per turn (parsed from the model's JSON reply) rather than chaining multiple actions itself; multi-step requests may need a couple of back-and-forth turns.
+- **Voice recognition/synthesis quality depends on the browser** — best on Chrome/Edge (desktop + Android); Safari/iOS support is present but less consistent, and the mic/speaker buttons hide themselves automatically where unsupported.
 
 ## Roadmap
 
@@ -178,3 +207,5 @@ Found via live testing + inspecting `net._http_response` logs in Supabase and Ve
 - Document attachments (not just images/voice)
 - Chat transcript export
 - TURN server for reliable calling across all networks
+- Per-agent permission levels (including for the admin AI assistant)
+- Per-account theme sync (not just per-device)
