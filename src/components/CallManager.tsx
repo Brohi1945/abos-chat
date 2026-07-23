@@ -2,7 +2,7 @@
 //  src/components/CallManager.tsx
 //  Global call state machine — mounted once at the app root.
 //  PHASE 1: ICE restart / auto-reconnect logic added.
-//  PHASE 1: TURN credentials are passed through webrtc.ts.
+//  PHASE 1: Dynamic TURN credentials support (await createPeerConnection)
 // ============================================================
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
@@ -184,7 +184,8 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
     setLocalStream(stream);
 
-    const pc = createPeerConnection({
+    // ⬇️ PHASE 1 + DYNAMIC TURN: await lagaya kyunki ab createPeerConnection async hai
+    const pc = await createPeerConnection({
       onRemoteStream: (s) => setRemoteStream(s),
       onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
 
