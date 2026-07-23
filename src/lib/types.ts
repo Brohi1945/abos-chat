@@ -1,3 +1,8 @@
+// ============================================================
+//  src/lib/types.ts
+//  Complete Types — Phase 1 to 7
+// ============================================================
+
 export type Role = "customer" | "owner" | "agent";
 
 export interface Profile {
@@ -7,6 +12,9 @@ export interface Profile {
   email: string | null;
   role: Role;
   created_at: string;
+  // Phase 6: Call waiting
+  on_call?: boolean;
+  current_call_id?: string | null;
 }
 
 export type ConversationStatus = "open" | "pending" | "resolved" | "urgent";
@@ -21,13 +29,8 @@ export interface Conversation {
   tags: string[];
   customer_last_read_at: string | null;
   owner_last_read_at: string | null;
-  // joined in on the owner's inbox view
-  customer?: Profile;
 }
 
-/** One row from the abos_chat_owner_inbox() / abos_chat_search_conversations()
- *  RPCs — a conversation with its customer info and unread count already
- *  computed server-side. */
 export interface OwnerInboxRow {
   id: string;
   customer_id: string;
@@ -43,10 +46,25 @@ export interface OwnerInboxRow {
   unread_count: number;
 }
 
-export type MessageKind = "text" | "image" | "location" | "voice" | "product" | "call" | "order";
+export type MessageKind =
+  | "text"
+  | "image"
+  | "location"
+  | "voice"
+  | "product"
+  | "call"
+  | "order";
 
 export type CallKind = "voice" | "video";
-export type CallStatus = "ringing" | "active" | "ended" | "missed" | "declined";
+
+// Phase 6: Added 'waiting' status
+export type CallStatus =
+  | "ringing"
+  | "active"
+  | "ended"
+  | "missed"
+  | "declined"
+  | "waiting";
 
 export interface Call {
   id: string;
@@ -62,9 +80,6 @@ export interface Call {
   duration_seconds: number | null;
 }
 
-/** Snapshot of a product at the moment it was sent as a card — not a
- *  live reference, so price/stock shown stays accurate to what the
- *  customer was actually told even if the product changes later. */
 export interface ProductSnapshot {
   id: string;
   name: string;
@@ -73,8 +88,6 @@ export interface ProductSnapshot {
   category: string | null;
 }
 
-/** A single line item inside an AI-placed order — snapshotted at
- *  confirm time (same pattern as ProductSnapshot). */
 export interface OrderItem {
   product_id: string;
   name: string;
@@ -82,8 +95,6 @@ export interface OrderItem {
   quantity: number;
 }
 
-/** Rendered as a rich "order confirmed" card in the chat once the AI
- *  agent finalizes an order via the confirm_order tool. */
 export interface OrderSnapshot {
   order_id: string;
   items: OrderItem[];
@@ -104,16 +115,16 @@ export interface ChatMessage {
   is_ai: boolean;
   product_snapshot: ProductSnapshot | null;
   order_snapshot: OrderSnapshot | null;
-  // Snapshot of who on the store side actually sent this (owner vs a
-  // named agent) — null for customer messages and for AI replies.
   sender_name: string | null;
   sender_title: "Owner" | "Agent" | null;
   broadcast_id: string | null;
   call_id: string | null;
   created_at: string;
+  // Phase 5: Read receipt
+  read_at: string | null;
+  delivery_status: "sent" | "delivered" | "read" | "failed";
 }
 
-/** A single ABOS order, as returned by /api/customer-orders. */
 export interface LinkedOrder {
   id: string;
   customer: string | null;
