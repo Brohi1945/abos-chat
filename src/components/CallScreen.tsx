@@ -1,6 +1,13 @@
+// ============================================================
+//  src/components/CallScreen.tsx
+//  Full-screen active/outgoing call UI.
+//  PHASE 3: Quality badge added (shows connection quality)
+// ============================================================
+
 import React, { useEffect, useRef, useState } from "react";
-import { Mic, MicOff, Video, VideoOff, PhoneOff, User, Volume2 } from "lucide-react";
+import { Mic, MicOff, Video, VideoOff, PhoneOff, User, Volume2, Wifi } from "lucide-react";
 import { Call } from "../lib/types";
+import { CallQualityReport } from "../lib/webrtc";
 
 interface CallScreenProps {
   call: Call;
@@ -13,6 +20,29 @@ interface CallScreenProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onHangup: () => void;
+  // ---- PHASE 3: Quality report from parent ----
+  qualityReport?: CallQualityReport | null;
+}
+
+// ---- Helper to get quality color ----
+function getQualityColor(quality: string): string {
+  switch (quality) {
+    case 'excellent': return 'bg-green-500';
+    case 'good': return 'bg-cyan-500';
+    case 'poor': return 'bg-yellow-500';
+    case 'very-poor': return 'bg-red-500';
+    default: return 'bg-slate-500';
+  }
+}
+
+function getQualityLabel(quality: string): string {
+  switch (quality) {
+    case 'excellent': return 'Excellent';
+    case 'good': return 'Good';
+    case 'poor': return 'Weak';
+    case 'very-poor': return 'Very Weak';
+    default: return '--';
+  }
 }
 
 function useElapsedSeconds(startAt: string | null) {
@@ -45,19 +75,13 @@ export default function CallScreen({
   onToggleMute,
   onToggleCamera,
   onHangup,
+  qualityReport,
 }: CallScreenProps) {
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const elapsed = useElapsedSeconds(phase === "active" ? call.answered_at : null);
   const isVideo = call.kind === "video";
-  // By the time the WebRTC offer/answer/ICE dance finishes and a remote
-  // track actually arrives, the original "Accept" tap's user-gesture
-  // window has usually expired — browsers then silently block
-  // audio/video.play() rather than erroring, so the call looks
-  // "connected" but nothing is heard. Try to play automatically; if
-  // blocked, surface a one-tap button (a fresh click always satisfies
-  // the gesture requirement).
   const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
 
   useEffect(() => {
@@ -81,9 +105,45 @@ export default function CallScreen({
       .catch(() => {});
   };
 
+  // ---- PHASE 3: Quality badge ----
+  const showQuality = phase === "active" && qualityReport;
+  const qualityColor = showQuality ? getQualityColor(qualityReport!.quality) : 'bg-slate-500';
+  const qualityLabel = showQuality ? getQualityLabel(qualityReport!.quality) : '--';
+  
+  // Get quality icon color based on quality
+  const getWifiColor = (quality: string): string => {
+    switch (quality) {
+      case 'excellent': return 'text-green-400';
+      case 'good': return 'text-cyan-400';
+      case 'poor': return 'text-yellow-400';
+      case 'very-poor': return 'text-red-400';
+      default: return 'text-slate-400';
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[70] bg-slate-950 flex flex-col">
       {!isVideo && <audio ref={remoteAudioRef} autoPlay />}
+
+      {/* ---- PHASE 3: Quality badge (top-right) ---- */}
+      {showQuality && (
+        <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+          <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-3 py-1.5 border border-white/10">
+            <Wifi size={14} className={getWifiColor(qualityReport!.quality)} />
+            <span className="text-[10px] text-white font-medium">
+              {qualityLabel}
+              {qualityReport!.packetLoss !== null && qualityReport!.packetLoss > 0 && (
+                <span className="text-slate-400 ml-1">· {qualityReport!.packetLoss}% loss</span>
+              )}
+              {qualityReport!.rtt !== null && qualityReport!.rtt > 0 && (
+                <span className="text-slate-400 ml-1">· {Math.round(qualityReport!.rtt)}ms</span>
+              )}
+            </span>
+            {/* Small dot indicator */}
+            <span className={`w-1.5 h-1.5 rounded-full ${qualityColor} ml-0.5`} />
+          </div>
+        </div>
+      )}
 
       {/* Video / avatar area */}
       <div className="flex-1 relative flex items-center justify-center overflow-hidden">
@@ -113,7 +173,7 @@ export default function CallScreen({
             <div className="w-24 h-24 rounded-full bg-brand/20 text-brand flex items-center justify-center">
               <User size={40} />
             </div>
-            <div className="text-lg font-semibold">{peerLabel}</div>
+            <div className="text-lg font-semibold text-white">{peerLabel}</div>
             <div className="text-sm text-slate-400">
               {phase === "outgoing" ? "Ringing…" : formatDuration(elapsed)}
             </div>
@@ -121,7 +181,7 @@ export default function CallScreen({
         )}
 
         {isVideo && (
-          <div className="absolute top-4 left-4 bg-black/40 rounded-full px-3 py-1.5 text-xs font-medium">
+          <div className="absolute top-4 left-4 bg-black/40 rounded-full px-3 py-1.5 text-xs font-medium text-white">
             {peerLabel} · {phase === "outgoing" ? "Ringing…" : formatDuration(elapsed)}
           </div>
         )}
@@ -142,8 +202,8 @@ export default function CallScreen({
         <button
           onClick={onToggleMute}
           disabled={phase !== "active"}
-          className={`w-14 h-14 rounded-full flex items-center justify-center disabled:opacity-40 ${
-            muted ? "bg-white text-slate-900" : "bg-slate-800 text-white"
+          className={`w-14 h-14 rounded-full flex items-center justify-center disabled:opacity-40 transition ${
+            muted ? "bg-white text-slate-900" : "bg-slate-800 text-white hover:bg-slate-700"
           }`}
         >
           {muted ? <MicOff size={20} /> : <Mic size={20} />}
@@ -153,8 +213,8 @@ export default function CallScreen({
           <button
             onClick={onToggleCamera}
             disabled={phase !== "active"}
-            className={`w-14 h-14 rounded-full flex items-center justify-center disabled:opacity-40 ${
-              cameraOff ? "bg-white text-slate-900" : "bg-slate-800 text-white"
+            className={`w-14 h-14 rounded-full flex items-center justify-center disabled:opacity-40 transition ${
+              cameraOff ? "bg-white text-slate-900" : "bg-slate-800 text-white hover:bg-slate-700"
             }`}
           >
             {cameraOff ? <VideoOff size={20} /> : <Video size={20} />}
@@ -163,7 +223,7 @@ export default function CallScreen({
 
         <button
           onClick={onHangup}
-          className="w-16 h-16 rounded-full bg-red-500 text-white flex items-center justify-center"
+          className="w-16 h-16 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 transition shadow-lg shadow-red-500/30"
           aria-label="Hang up"
         >
           <PhoneOff size={24} />
