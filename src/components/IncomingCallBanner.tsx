@@ -1,5 +1,12 @@
+// ============================================================
+//  src/components/IncomingCallBanner.tsx
+//  Complete Incoming Call Banner — Phase 1 to 7
+//  - Ringtone + Vibration
+//  - Call waiting support (Phase 6)
+// ============================================================
+
 import React, { useEffect } from "react";
-import { Phone, PhoneOff, Video } from "lucide-react";
+import { Phone, PhoneOff, Video, Clock } from "lucide-react";
 import { Call } from "../lib/types";
 
 interface IncomingCallBannerProps {
@@ -9,10 +16,6 @@ interface IncomingCallBannerProps {
   onDecline: () => void;
 }
 
-/** Ringtone — a classic "ring-ring… pause…" double-pulse pattern, like
- *  an actual phone call, looped via Web Audio (no audio file needed).
- *  Also vibrates the device in sync, on browsers that support it.
- *  Both stop automatically when the banner unmounts. */
 function useRingtone() {
   useEffect(() => {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
@@ -55,16 +58,20 @@ function useRingtone() {
 export default function IncomingCallBanner({ call, peerLabel, onAccept, onDecline }: IncomingCallBannerProps) {
   useRingtone();
 
+  const isWaiting = call.status === 'waiting';
+
   return (
     <div className="fixed inset-x-0 top-0 z-[60] px-3 pt-3">
       <div className="max-w-sm mx-auto bg-surface border rounded-2xl shadow-xl px-4 py-3 flex items-center gap-3">
-        <div className="w-11 h-11 rounded-full bg-brand/20 text-brand flex items-center justify-center shrink-0 animate-pulse">
-          {call.kind === "video" ? <Video size={18} /> : <Phone size={18} />}
+        <div className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${
+          isWaiting ? 'bg-warning/20 text-warning' : 'bg-brand/20 text-brand'
+        }`}>
+          {isWaiting ? <Clock size={18} /> : call.kind === "video" ? <Video size={18} /> : <Phone size={18} />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold truncate text-fg">{peerLabel}</div>
           <div className="text-[11px] text-muted">
-            Incoming {call.kind === "video" ? "video" : "voice"} call…
+            {isWaiting ? 'Already on a call — waiting...' : `Incoming ${call.kind === "video" ? "video" : "voice"} call…`}
           </div>
         </div>
         <button
@@ -76,7 +83,10 @@ export default function IncomingCallBanner({ call, peerLabel, onAccept, onDeclin
         </button>
         <button
           onClick={onAccept}
-          className="w-10 h-10 rounded-full bg-success text-white flex items-center justify-center shrink-0"
+          disabled={isWaiting}
+          className={`w-10 h-10 rounded-full text-white flex items-center justify-center shrink-0 ${
+            isWaiting ? 'bg-slate-500 cursor-not-allowed' : 'bg-success hover:bg-success/80'
+          }`}
           aria-label="Accept"
         >
           <Phone size={16} />
