@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
+import { Toaster } from "react-hot-toast";
 import { supabase } from "./lib/supabaseClient";
 import { getCurrentProfile } from "./lib/chatApi";
 import { Profile } from "./lib/types";
+import { ThemeProvider } from "./theme";
 import AuthScreen from "./screens/AuthScreen";
 import CustomerChatScreen from "./screens/CustomerChatScreen";
 import OwnerInboxScreen from "./screens/OwnerInboxScreen";
@@ -45,19 +47,25 @@ export default function App() {
 
   if (loading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-slate-950">
-        <Loader2 className="animate-spin text-slate-500" size={22} />
-      </div>
+      <ThemeProvider>
+        <Toaster position="top-center" />
+        <div className="h-screen flex items-center justify-center bg-slate-950">
+          <Loader2 className="animate-spin text-slate-500" size={22} />
+        </div>
+      </ThemeProvider>
     );
   }
 
-  if (!profile) {
-    return <AuthScreen onAuthed={refresh} />;
-  }
-
-  return isOwner(profile) ? (
-    <OwnerInboxScreen me={profile} onSignedOut={refresh} />
-  ) : (
-    <CustomerChatScreen me={profile} onSignedOut={refresh} />
+  return (
+    <ThemeProvider>
+      <Toaster position="top-center" />
+      {!profile ? (
+        <AuthScreen onAuthed={refresh} />
+      ) : isOwner(profile) ? (
+        <OwnerInboxScreen me={profile} onSignedOut={refresh} />
+      ) : (
+        <CustomerChatScreen me={profile} onSignedOut={refresh} />
+      )}
+    </ThemeProvider>
   );
 }
