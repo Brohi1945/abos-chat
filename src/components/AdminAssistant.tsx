@@ -273,8 +273,10 @@ Rules:
       const text =
         status === 429
           ? "Abhi thora zyada traffic hai is liye jawab dene mein dair lag rahi hai — 30 second baad dobara try karein."
-          : status === 401 || status === 403
+          : status === 401
           ? "Aapka session expire ho gaya lagta hai — dobara login karein."
+          : status === 403
+          ? "Aapke account ko owner/agent access nahi mila — apna role check karwayein."
           : status === 500 && /GROQ_API_KEY/i.test(err?.detail?.error || err?.message || "")
           ? "AI service configure nahi hai (API key missing) — admin ko batayein."
           : "Maaf kijiye, is waqt assistant tak nahi pohanch saka — thodi dair mein dobara koshish karein.";
