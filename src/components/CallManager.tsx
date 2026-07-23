@@ -3,6 +3,7 @@
 //  Global call state machine — mounted once at the app root.
 //  PHASE 1: ICE restart / auto-reconnect logic added.
 //  PHASE 1: Dynamic TURN credentials support (await createPeerConnection)
+//  PHASE 2: HD Video + Bitrate Control (onPeerConnectionReady callback)
 // ============================================================
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
@@ -17,7 +18,13 @@ import {
   openCallSignalChannel,
   SignalMessage,
 } from "../lib/callApi";
-import { createPeerConnection, getLocalStream, stopStream, callingIsSupported } from "../lib/webrtc";
+import {
+  createPeerConnection,
+  getLocalStream,
+  stopStream,
+  callingIsSupported,
+  setBitrateParameters,
+} from "../lib/webrtc";
 import IncomingCallBanner from "./IncomingCallBanner";
 import CallScreen from "./CallScreen";
 
@@ -184,7 +191,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
     setLocalStream(stream);
 
-    // ⬇️ PHASE 1 + DYNAMIC TURN: await lagaya kyunki ab createPeerConnection async hai
+    // PHASE 1 + PHASE 2: createPeerConnection with all callbacks
     const pc = await createPeerConnection({
       onRemoteStream: (s) => setRemoteStream(s),
       onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
@@ -227,6 +234,12 @@ export default function CallManager({ me, myConversationId, children }: CallMana
             restartTimeoutRef.current = null;
           }
         }
+      },
+
+      // ---- PHASE 2: Bitrate parameters set when peer connection is ready ----
+      onPeerConnectionReady: (readyPc) => {
+        setBitrateParameters(readyPc);
+        console.log("✅ Phase 2: Bitrate parameters set on peer connection");
       },
     });
     pcRef.current = pc;
