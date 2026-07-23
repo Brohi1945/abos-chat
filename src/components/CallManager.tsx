@@ -1,3 +1,10 @@
+// ============================================================
+//  src/components/CallManager.tsx
+//  Global call state machine — mounted once at the app root.
+//  PHASE 1: ICE restart / auto-reconnect logic added.
+//  PHASE 1: TURN credentials are passed through webrtc.ts.
+// ============================================================
+
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Profile, Call, CallKind } from "../lib/types";
 import {
@@ -51,6 +58,12 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const callRowUnsubRef = useRef<() => void>(() => {});
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+
+  // ---- PHASE 1: ICE restart refs ----
+  const restartAttemptedRef = useRef(false);
+  const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isNegotiatingRef = useRef(false);
 
   // Ask once, early, so the permission prompt isn't tied to the call
   // moment itself (that would be too late — permission requests need
@@ -117,6 +130,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, call?.id]);
 
+  // ---- cleanup (shared by resetToIdle and unmount) ----
   const cleanupMedia = () => {
     stopStream(localStream);
     setLocalStream(null);
@@ -132,6 +146,18 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     callRowUnsubRef.current();
     callRowUnsubRef.current = () => {};
     pendingIceRef.current = [];
+
+    // PHASE 1: clear restart-related timeouts
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+    if (resetRestartTimeoutRef.current) {
+      clearTimeout(resetRestartTimeoutRef.current);
+      resetRestartTimeoutRef.current = null;
+    }
+    restartAttemptedRef.current = false;
+    isNegotiatingRef.current = false;
   };
 
   const resetToIdle = () => {
@@ -143,6 +169,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setCameraOff(false);
   };
 
+  // ---- begin active call (sets up peer connection + signaling) ----
   const beginActiveCall = async (activeCall: Call, isCaller: boolean) => {
     setPhase("active");
 
@@ -160,10 +187,72 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     const pc = createPeerConnection({
       onRemoteStream: (s) => setRemoteStream(s),
       onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
+
+      // ---- PHASE 1: ICE connection state listener (restart logic) ----
+      onIceConnectionStateChange: (state) => {
+        // Only attempt restart if call is active and we're not already trying
+        if (phase !== "active") return;
+        if (state === "disconnected" || state === "failed") {
+          if (restartAttemptedRef.current) return;
+          restartAttemptedRef.current = true;
+
+          // Wait 2.5 seconds before restarting — gives network a moment to recover
+          if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+          restartTimeoutRef.current = setTimeout(() => {
+            // Double-check that call is still active and connection is still bad
+            if (phase !== "active") return;
+            if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+              restartAttemptedRef.current = false;
+              return;
+            }
+            // Restart ICE — this will trigger onnegotiationneeded
+            try {
+              pc.restartIce();
+            } catch (err) {
+              console.error("ICE restart failed:", err);
+            }
+
+            // Reset the attempt flag after a cooldown (10s) so we can try again if needed
+            if (resetRestartTimeoutRef.current) clearTimeout(resetRestartTimeoutRef.current);
+            resetRestartTimeoutRef.current = setTimeout(() => {
+              restartAttemptedRef.current = false;
+            }, 10000);
+          }, 2500);
+        } else if (state === "connected" || state === "completed") {
+          // Connection recovered — reset attempt flag
+          restartAttemptedRef.current = false;
+          if (restartTimeoutRef.current) {
+            clearTimeout(restartTimeoutRef.current);
+            restartTimeoutRef.current = null;
+          }
+        }
+      },
     });
     pcRef.current = pc;
+
+    // ---- PHASE 1: negotiation handler for ICE restart ----
+    pc.onnegotiationneeded = async () => {
+      // Prevent duplicate negotiations
+      if (isNegotiatingRef.current) return;
+      // Only the caller should initiate negotiation (offer)
+      if (!isCaller) return;
+
+      isNegotiatingRef.current = true;
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        signalRef.current?.send({ type: "offer", sdp: offer, from: me.id });
+      } catch (err) {
+        console.error("Negotiation needed failed:", err);
+      } finally {
+        isNegotiatingRef.current = false;
+      }
+    };
+
+    // ---- Add local tracks to the peer connection ----
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
 
+    // ---- Signaling channel ----
     const signal = openCallSignalChannel(activeCall.id, me.id, async (msg: SignalMessage) => {
       if (msg.type === "offer") {
         await pc.setRemoteDescription(msg.sdp);
@@ -186,13 +275,21 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     });
     signalRef.current = signal;
 
+    // ---- Initial offer (only if caller) ----
     if (isCaller) {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      signal.send({ type: "offer", sdp: offer, from: me.id });
+      // We set negotiating flag to prevent onnegotiationneeded from firing during manual offer
+      isNegotiatingRef.current = true;
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        signal.send({ type: "offer", sdp: offer, from: me.id });
+      } finally {
+        isNegotiatingRef.current = false;
+      }
     }
   };
 
+  // ---- startCall (outgoing) ----
   const startCall = async (conversationId: string, kind: CallKind, label: string) => {
     if (phase !== "idle") return;
     if (!callingIsSupported()) {
@@ -226,6 +323,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }, RING_TIMEOUT_MS);
   };
 
+  // ---- accept incoming ----
   const acceptIncoming = async () => {
     if (!call) return;
     const won = await claimCall(call.id, me);
@@ -239,6 +337,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     await beginActiveCall(fresh, false);
   };
 
+  // ---- decline incoming ----
   const declineIncoming = async () => {
     if (!call) return;
     // Only end the call outright when we're the sole possible
@@ -250,6 +349,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     resetToIdle();
   };
 
+  // ---- hangup ----
   const hangup = async () => {
     if (!call) return;
     if (phase === "active") signalRef.current?.send({ type: "hangup", from: me.id });
@@ -271,6 +371,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setCameraOff(next);
   };
 
+  // Auto-clear media error after 4s
   useEffect(() => {
     if (!mediaError) return;
     const id = setTimeout(() => setMediaError(""), 4000);
