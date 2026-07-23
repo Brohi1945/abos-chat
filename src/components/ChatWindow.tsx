@@ -1,3 +1,10 @@
+// ============================================================
+//  src/components/ChatWindow.tsx
+//  Complete Chat Window — Phase 1 to 7
+//  - Messages, typing, read receipts (Phase 5)
+//  - Call buttons
+// ============================================================
+
 import React, { useEffect, useRef, useState } from "react";
 import {
   Send,
@@ -25,6 +32,8 @@ import {
   subscribeToConversation,
   subscribeToTyping,
   updateConversationStatus,
+  markMessagesRead,
+  processMessageQueue,
 } from "../lib/chatApi";
 import MessageBubble from "./MessageBubble";
 import ProductPicker from "./ProductPicker";
@@ -37,9 +46,6 @@ const STATUS_OPTIONS: { value: ConversationStatus; label: string; className: str
   { value: "resolved", label: "Resolved", className: "bg-success/15 text-success" },
 ];
 
-/** Store-side display identity attached to every message this user
- *  sends — undefined for customers, since their own bubble already
- *  shows who they are via isMine. */
 function staffIdentity(me: Profile) {
   if (me.role === "customer") return {};
   return { senderName: me.name || me.email || undefined, senderTitle: (me.role === "owner" ? "Owner" : "Agent") as "Owner" | "Agent" };
@@ -87,15 +93,14 @@ export default function ChatWindow({
   const [errorMsg, setErrorMsg] = useState("");
   const [otherTyping, setOtherTyping] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(false);
-  // Agents share the "owner" side of the conversation for read-receipts,
-  // typing indicators, and sender_role — their distinct identity is
-  // carried separately via sender_name/sender_title.
+
   const chatRole: "customer" | "owner" = me.role === "customer" ? "customer" : "owner";
   const { startCall } = useCall();
 
   const handleStartCall = (kind: "voice" | "video") => {
     startCall(conversationId, kind, headerTitle);
   };
+
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -103,6 +108,19 @@ export default function ChatWindow({
   const audioChunksRef = useRef<BlobPart[]>([]);
   const lastMessageIdRef = useRef<string | null>(null);
   const typingApiRef = useRef<ReturnType<typeof subscribeToTyping> | null>(null);
+
+  // ---- Phase 5: Process message queue ----
+  useEffect(() => {
+    // Process queue every 30 seconds
+    const queueInterval = setInterval(() => {
+      processMessageQueue(me.id);
+    }, 30000);
+
+    // Also process on mount
+    processMessageQueue(me.id);
+
+    return () => clearInterval(queueInterval);
+  }, [me.id]);
 
   const mergeMessages = (incoming: ChatMessage[]) => {
     setMessages((prev) => {
@@ -122,12 +140,20 @@ export default function ChatWindow({
       setMessages(page.messages);
       setHasMoreOlder(page.hasMore);
       setConversation(convo);
+
+      // ---- Phase 5: Mark messages as read ----
+      await markMessagesRead(conversationId, me.id);
       markConversationRead(conversationId, chatRole);
 
       unsubMessages = subscribeToMessages(conversationId, (msg) => {
         mergeMessages([msg]);
-        markConversationRead(conversationId, chatRole);
+        // Mark as read when new message arrives
+        if (msg.sender_id !== me.id) {
+          markMessagesRead(conversationId, me.id);
+          markConversationRead(conversationId, chatRole);
+        }
       });
+
       unsubConversation = subscribeToConversation(conversationId, (updated) => setConversation(updated));
 
       pollId = setInterval(async () => {
@@ -344,7 +370,6 @@ export default function ChatWindow({
     <div className="relative flex flex-col h-full">
       {showProductPicker && <ProductPicker onPick={handlePickProduct} onClose={() => setShowProductPicker(false)} />}
 
-      {/* Header */}
       <div className="px-2.5 sm:px-4 py-2.5 border-b flex items-center justify-between shrink-0 gap-1 bg-app">
         <div className="flex items-center gap-1.5 min-w-0">
           {showBackButton && onBack && (
@@ -397,7 +422,6 @@ export default function ChatWindow({
         </div>
       </div>
 
-      {/* Error toast */}
       {errorMsg && (
         <div className="px-4 py-2 bg-danger/10 border-b border-danger/20 flex items-center gap-2">
           <AlertCircle size={14} className="text-danger shrink-0" />
@@ -405,7 +429,6 @@ export default function ChatWindow({
         </div>
       )}
 
-      {/* Messages */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4">
         {hasMoreOlder && (
           <div className="flex justify-center mb-3">
@@ -436,7 +459,6 @@ export default function ChatWindow({
         <div ref={bottomRef} />
       </div>
 
-      {/* Composer */}
       <div className="p-3 border-t shrink-0 bg-app">
         <div className="flex items-center gap-1.5">
           <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handleImageSelected} />
