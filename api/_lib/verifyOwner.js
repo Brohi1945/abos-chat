@@ -12,7 +12,15 @@ export async function verifyOwner(req) {
 
   const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY;
-  const supabase = createClient(url, anonKey);
+  // IMPORTANT: the Authorization header must be attached at client-creation
+  // time. getUser(token) below only verifies the token itself — it does
+  // NOT set the client's request context. Without this header, the
+  // .from() query further down runs as the anonymous role, auth.uid()
+  // resolves to NULL, RLS silently hides the row, and a real owner gets
+  // wrongly rejected as "not an owner" (403) instead of being recognized.
+  const supabase = createClient(url, anonKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
 
   const { data: userData, error: userErr } = await supabase.auth.getUser(token);
   if (userErr || !userData.user) {
@@ -42,7 +50,11 @@ export async function verifyStaff(req) {
 
   const url = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL;
   const anonKey = process.env.VITE_SUPABASE_ANON_KEY;
-  const supabase = createClient(url, anonKey);
+  // Same fix as verifyOwner above — attach the token so RLS sees the
+  // real caller instead of treating the query as anonymous.
+  const supabase = createClient(url, anonKey, {
+    global: { headers: { Authorization: `Bearer ${token}` } },
+  });
 
   const { data: userData, error: userErr } = await supabase.auth.getUser(token);
   if (userErr || !userData.user) {
