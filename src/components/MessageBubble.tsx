@@ -1,19 +1,41 @@
+// ============================================================
+//  src/components/MessageBubble.tsx
+//  Complete Message Bubble — Phase 1 to 7
+//  - Read receipts (Phase 5)
+//  - Message delivery status (Phase 5)
+// ============================================================
+
 import React from "react";
-import { MapPin, ExternalLink, Check, CheckCheck, Package, Phone, Video, PhoneMissed, ShoppingBag } from "lucide-react";
+import { MapPin, ExternalLink, Check, CheckCheck, Package, Phone, Video, PhoneMissed, ShoppingBag, Clock } from "lucide-react";
 import { ChatMessage } from "../lib/types";
 
 interface MessageBubbleProps {
   message: ChatMessage;
   isMine: boolean;
-  // Only meaningful when isMine is true — has the OTHER side read this yet?
   isRead?: boolean;
 }
 
 function mapsEmbedUrl(lat: number, lng: number) {
   return `https://www.google.com/maps?q=${lat},${lng}&output=embed`;
 }
+
 function mapsSearchUrl(lat: number, lng: number) {
   return `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+}
+
+function getDeliveryIcon(status: string) {
+  switch (status) {
+    case 'read':
+      return <CheckCheck size={13} className="text-accent" />;
+    case 'delivered':
+      return <CheckCheck size={13} className="text-muted" />;
+    case 'sent':
+      return <Check size={13} className="text-muted" />;
+    case 'failed':
+      return <Clock size={13} className="text-danger" />;
+    default:
+      return <Check size={13} className="text-muted" />;
+  }
 }
 
 export default function MessageBubble({ message, isMine, isRead }: MessageBubbleProps) {
@@ -37,7 +59,6 @@ export default function MessageBubble({ message, isMine, isRead }: MessageBubble
       </div>
     );
   }
-
 
   return (
     <div className={`flex ${isMine ? "justify-end" : "justify-start"} mb-2.5`}>
@@ -109,9 +130,6 @@ export default function MessageBubble({ message, isMine, isRead }: MessageBubble
               }`}
             >
               <MapPin size={12} />
-              {/* This is a one-time location share, not a live-updating
-                  position — worded accordingly so it doesn't imply
-                  ongoing tracking that isn't actually happening. */}
               <span className="truncate">Location shared</span>
               <ExternalLink size={11} className="ml-auto shrink-0" />
             </a>
@@ -191,12 +209,11 @@ export default function MessageBubble({ message, isMine, isRead }: MessageBubble
           }`}
         >
           <span>{time}</span>
-          {isMine &&
-            (isRead ? (
-              <CheckCheck size={13} className="text-accent" />
-            ) : (
-              <Check size={13} className="text-white/70" />
-            ))}
+          {isMine && (
+            <div className="flex items-center gap-0.5">
+              {getDeliveryIcon(message.delivery_status || 'sent')}
+            </div>
+          )}
         </div>
       </div>
     </div>
