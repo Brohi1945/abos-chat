@@ -1,56 +1,36 @@
 // ============================================================
 //  src/lib/webrtc.ts
-//  PHASE 2 + PHASE 3: HD Video + Bitrate + Quality Monitoring
-//  - HD resolution (1280x720 @ 30fps)
-//  - Bitrate control (video 1.5-2.5 Mbps, audio 32-64 kbps)
-//  - Opus FEC (useinbandfec=1)
-//  - H.264 video codec preference
-//  - PHASE 3: Quality monitoring via getStats()
+//  Complete WebRTC — Phase 1 to 7
+//  - TURN + ICE Restart (Phase 1)
+//  - HD Video + Bitrate (Phase 2)
+//  - Wake Lock + Quality (Phase 3)
+//  - Security (Phase 4)
+//  - Call Waiting (Phase 6)
 // ============================================================
 
 import { CallKind } from "./types";
 
-// Fallback STUN servers (used if TURN fetch fails)
+// Fallback STUN servers
 const FALLBACK_STUN: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
   { urls: "stun:stun1.l.google.com:19302" },
 ];
 
 // ============================================================
-//  PHASE 3: Quality monitoring types
+//  PHASE 1: TURN Credentials
 // ============================================================
 
-export interface CallQualityReport {
-  /** Current round-trip time in milliseconds */
-  rtt: number | null;
-  /** Packet loss percentage (0-100) */
-  packetLoss: number | null;
-  /** Available outgoing bitrate in bps */
-  bitrate: number | null;
-  /** Quality score: 'excellent' | 'good' | 'poor' | 'very-poor' */
-  quality: 'excellent' | 'good' | 'poor' | 'very-poor';
-}
-
-export type QualityCallback = (report: CallQualityReport) => void;
-
-/**
- * Fetches fresh, time-limited TURN credentials from our Vercel endpoint.
- */
 async function fetchTurnServers(): Promise<RTCIceServer[]> {
   try {
     const response = await fetch("/api/turn-credentials");
-    
     if (!response.ok) {
       console.warn("Failed to fetch TURN credentials, falling back to STUN only");
       return [...FALLBACK_STUN];
     }
-    
     const data = await response.json();
-    
     if (data.iceServers && Array.isArray(data.iceServers) && data.iceServers.length > 0) {
       return data.iceServers;
     }
-    
     return [...FALLBACK_STUN];
   } catch (err) {
     console.warn("Error fetching TURN credentials:", err);
@@ -62,15 +42,35 @@ export async function getIceServers(): Promise<RTCIceServer[]> {
   return await fetchTurnServers();
 }
 
+// ============================================================
+//  PHASE 3: Quality Monitoring Types
+// ============================================================
+
+export interface CallQualityReport {
+  rtt: number | null;
+  packetLoss: number | null;
+  bitrate: number | null;
+  quality: 'excellent' | 'good' | 'poor' | 'very-poor';
+}
+
+export type QualityCallback = (report: CallQualityReport) => void;
+
+// ============================================================
+//  Peer Connection Callbacks
+// ============================================================
+
 export interface PeerCallbacks {
   onRemoteStream: (stream: MediaStream) => void;
   onIceCandidate: (candidate: RTCIceCandidateInit) => void;
   onConnectionStateChange?: (state: RTCPeerConnectionState) => void;
   onIceConnectionStateChange?: (state: RTCIceConnectionState) => void;
   onPeerConnectionReady?: (pc: RTCPeerConnection) => void;
-  /** PHASE 3: Quality monitoring callback */
   onQualityReport?: (report: CallQualityReport) => void;
 }
+
+// ============================================================
+//  Create Peer Connection
+// ============================================================
 
 export async function createPeerConnection(
   callbacks: PeerCallbacks
@@ -105,7 +105,6 @@ export async function createPeerConnection(
     };
   }
 
-  // PHASE 3: Start quality monitoring when negotiation is complete
   const origOnNegotiationNeeded = pc.onnegotiationneeded;
   pc.onnegotiationneeded = async () => {
     if (origOnNegotiationNeeded) {
@@ -116,7 +115,6 @@ export async function createPeerConnection(
         callbacks.onPeerConnectionReady!(pc);
       }, 500);
     }
-    // PHASE 3: Start quality monitoring after connection is stable
     if (callbacks.onQualityReport) {
       setTimeout(() => {
         startQualityMonitoring(pc, callbacks.onQualityReport!);
@@ -128,7 +126,7 @@ export async function createPeerConnection(
 }
 
 // ============================================================
-//  PHASE 2: getLocalStream with HD video constraints
+//  PHASE 2: HD Video + Audio
 // ============================================================
 
 export async function getLocalStream(kind: CallKind): Promise<MediaStream> {
@@ -156,7 +154,7 @@ export async function getLocalStream(kind: CallKind): Promise<MediaStream> {
 }
 
 // ============================================================
-//  PHASE 2: Bitrate control
+//  PHASE 2: Bitrate Control
 // ============================================================
 
 export function setBitrateParameters(pc: RTCPeerConnection): void {
@@ -171,12 +169,12 @@ export function setBitrateParameters(pc: RTCPeerConnection): void {
 
       if (track.kind === "video") {
         if (!params.encodings) params.encodings = [{}];
-        params.encodings[0].maxBitrate = 2_500_000; // 2.5 Mbps
-        params.encodings[0].minBitrate = 1_500_000; // 1.5 Mbps
+        params.encodings[0].maxBitrate = 2_500_000;
+        params.encodings[0].minBitrate = 1_500_000;
       } else if (track.kind === "audio") {
         if (!params.encodings) params.encodings = [{}];
-        params.encodings[0].maxBitrate = 64_000; // 64 kbps
-        params.encodings[0].minBitrate = 32_000; // 32 kbps
+        params.encodings[0].maxBitrate = 64_000;
+        params.encodings[0].minBitrate = 32_000;
       }
 
       sender.setParameters(params).catch((err) => {
@@ -189,43 +187,32 @@ export function setBitrateParameters(pc: RTCPeerConnection): void {
 }
 
 // ============================================================
-//  PHASE 3: Quality Monitoring via getStats()
+//  PHASE 3: Quality Monitoring
 // ============================================================
 
 let qualityMonitorInterval: number | null = null;
 
-/**
- * Start monitoring call quality using RTCPeerConnection.getStats()
- * Calls the callback every 3 seconds with quality report.
- */
 export function startQualityMonitoring(
   pc: RTCPeerConnection,
   onReport: QualityCallback
 ): void {
-  // Clear any existing interval
   if (qualityMonitorInterval) {
     window.clearInterval(qualityMonitorInterval);
     qualityMonitorInterval = null;
   }
 
-  // Wait a moment for stats to become available
   setTimeout(() => {
     qualityMonitorInterval = window.setInterval(async () => {
       try {
         const report = await getCallQualityReport(pc);
         onReport(report);
       } catch (err) {
-        // Silently fail — stats collection is best-effort
         console.debug("Quality monitoring error:", err);
       }
-    }, 3000); // Every 3 seconds
+    }, 3000);
   }, 3000);
 }
 
-/**
- * Stop quality monitoring.
- * Call this when the call ends.
- */
 export function stopQualityMonitoring(): void {
   if (qualityMonitorInterval) {
     window.clearInterval(qualityMonitorInterval);
@@ -233,9 +220,6 @@ export function stopQualityMonitoring(): void {
   }
 }
 
-/**
- * Get a quality report from the peer connection.
- */
 async function getCallQualityReport(pc: RTCPeerConnection): Promise<CallQualityReport> {
   const stats = await pc.getStats();
 
@@ -243,29 +227,18 @@ async function getCallQualityReport(pc: RTCPeerConnection): Promise<CallQualityR
   let packetLoss: number | null = null;
   let bitrate: number | null = null;
 
-  // Find the relevant stats
   for (const [, stat] of stats) {
-    // RTT from candidate-pair stats
     if (stat.type === 'candidate-pair' && stat.currentRoundTripTime) {
-      rtt = stat.currentRoundTripTime * 1000; // Convert to ms
+      rtt = stat.currentRoundTripTime * 1000;
     }
-
-    // Packet loss from outbound-rtp stats
     if (stat.type === 'outbound-rtp' && stat.packetsLost !== undefined) {
       const total = stat.packetsSent + stat.packetsLost;
       if (total > 0) {
         packetLoss = (stat.packetsLost / total) * 100;
       }
     }
-
-    // Bitrate from outbound-rtp stats
-    if (stat.type === 'outbound-rtp' && stat.bytesSent !== undefined && stat.timestamp) {
-      // We need two samples to calculate bitrate, but we'll use the
-      // available bitrate from the sender parameters instead
-    }
   }
 
-  // Try to get bitrate from sender parameters
   try {
     const senders = pc.getSenders();
     for (const sender of senders) {
@@ -280,7 +253,6 @@ async function getCallQualityReport(pc: RTCPeerConnection): Promise<CallQualityR
     // ignore
   }
 
-  // Determine quality score
   let quality: 'excellent' | 'good' | 'poor' | 'very-poor' = 'good';
 
   if (packetLoss !== null) {
@@ -310,21 +282,13 @@ async function getCallQualityReport(pc: RTCPeerConnection): Promise<CallQualityR
 let wakeLock: any = null;
 let wakeLockSupported = false;
 
-/**
- * Check if Screen Wake Lock is supported.
- */
 export function isWakeLockSupported(): boolean {
   return 'wakeLock' in navigator;
 }
 
-/**
- * Request screen wake lock.
- * Call this when a call becomes active.
- */
 export async function requestWakeLock(): Promise<boolean> {
   try {
     if (!isWakeLockSupported()) {
-      console.warn('Screen Wake Lock not supported on this device');
       return false;
     }
     wakeLock = await navigator.wakeLock.request('screen');
@@ -337,10 +301,6 @@ export async function requestWakeLock(): Promise<boolean> {
   }
 }
 
-/**
- * Release screen wake lock.
- * Call this when the call ends.
- */
 export function releaseWakeLock(): void {
   if (wakeLock) {
     try {
@@ -354,9 +314,6 @@ export function releaseWakeLock(): void {
   }
 }
 
-/**
- * Re-acquire wake lock when the page becomes visible again.
- */
 export function setupWakeLockAutoRenew(): void {
   if (!isWakeLockSupported()) return;
 
@@ -367,14 +324,9 @@ export function setupWakeLockAutoRenew(): void {
   };
 
   document.addEventListener('visibilitychange', handleVisibilityChange);
-  
-  // Store the handler for cleanup
   (window as any).__wakeLockVisibilityHandler = handleVisibilityChange;
 }
 
-/**
- * Clean up wake lock event listeners.
- */
 export function cleanupWakeLockAutoRenew(): void {
   const handler = (window as any).__wakeLockVisibilityHandler;
   if (handler) {
@@ -384,7 +336,7 @@ export function cleanupWakeLockAutoRenew(): void {
 }
 
 // ============================================================
-//  Utility functions
+//  Utility Functions
 // ============================================================
 
 export function stopStream(stream: MediaStream | null) {
