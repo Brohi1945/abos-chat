@@ -1,0 +1,79 @@
+/*
+  This file mirrors colors.ts as CSS variables. tailwind.config.js
+  points its color names (app, surface, fg, muted, brand, accent,
+  success, danger, warning) at these variables, so the moment
+  .dark / .colorful is toggled on <html>, every component using
+  those Tailwind classes re-themes instantly — no component needs
+  to know which theme is active.
+
+  IMPORTANT: if a value ever changes here, update the matching value
+  in colors.ts too (kept in sync manually, on purpose — no build step
+  reads one from the other).
+*/
+
+:root {
+  --color-bg: #F8FAFC;
+  --color-surface: #FFFFFF;
+  --color-primary: #4F46E5;
+  --color-accent: #06B6D4;
+  --color-text: #0F172A;
+  --color-text-muted: #64748B;
+  --color-border: rgba(15, 23, 42, 0.08);
+  --color-success: #16A34A;
+  --color-danger: #DC2626;
+  --color-warning: #D97706;
+}
+
+.dark {
+  --color-bg: #0B0F19;
+  --color-surface: #111827;
+  --color-primary: #6366F1;
+  --color-accent: #22D3EE;
+  --color-text: #E5E7EB;
+  --color-text-muted: #9CA3AF;
+  --color-border: rgba(255, 255, 255, 0.08);
+  --color-success: #22C55E;
+  --color-danger: #EF4444;
+  --color-warning: #F59E0B;
+}
+
+/* "Colorful" (Aurora) — third theme: deep violet-black base with an
+   electric purple → pink brand gradient. Values must stay in sync
+   with colorfulColors in colors.ts. */
+.colorful {
+  --color-bg: #150F2B;
+  --color-surface: #241A45;
+  --color-primary: #A855F7;
+  --color-accent: #FB7185;
+  --color-text: #F5F3FF;
+  --color-text-muted: #C4B5E8;
+  --color-border: rgba(216, 180, 254, 0.18);
+  --color-success: #34D399;
+  --color-danger: #FB7185;
+  --color-warning: #FBBF24;
+}
+
+/* Soft aurora glow behind the app background, scoped only to the
+   colorful theme so light/dark stay exactly as before. */
+.colorful body {
+  background:
+    radial-gradient(1200px 600px at var(--aurora-x1, 0%) var(--aurora-y1, 0%), rgba(168, 85, 247, 0.25), transparent 60%),
+    radial-gradient(1000px 500px at var(--aurora-x2, 100%) var(--aurora-y2, 20%), rgba(251, 113, 133, 0.18), transparent 55%),
+    radial-gradient(900px 700px at var(--aurora-x3, 50%) var(--aurora-y3, 100%), rgba(56, 189, 248, 0.12), transparent 60%),
+    var(--color-bg);
+  animation: aurora-drift 24s ease-in-out infinite;
+}
+
+@keyframes aurora-drift {
+  0%   { --aurora-x1: 0%;   --aurora-y1: 0%;   --aurora-x2: 100%; --aurora-y2: 20%;  --aurora-x3: 50%;  --aurora-y3: 100%; }
+  33%  { --aurora-x1: 15%;  --aurora-y1: 10%;  --aurora-x2: 85%;  --aurora-y2: 5%;   --aurora-x3: 60%;  --aurora-y3: 90%;  }
+  66%  { --aurora-x1: -5%;  --aurora-y1: 15%;  --aurora-x2: 95%;  --aurora-y2: 30%;  --aurora-x3: 40%;  --aurora-y3: 95%;  }
+  100% { --aurora-x1: 0%;   --aurora-y1: 0%;   --aurora-x2: 100%; --aurora-y2: 20%;  --aurora-x3: 50%;  --aurora-y3: 100%; }
+}
+
+@property --aurora-x1 { syntax: '<percentage>'; inherits: false; initial-value: 0%; }
+@property --aurora-y1 { syntax: '<percentage>'; inherits: false; initial-value: 0%; }
+@property --aurora-x2 { syntax: '<percentage>'; inherits: false; initial-value: 100%; }
+@property --aurora-y2 { syntax: '<percentage>'; inherits: false; initial-value: 20%; }
+@property --aurora-x3 { syntax: '<percentage>'; inherits: false; initial-value: 50%; }
+@property --aurora-y3 { syntax: '<percentage>'; inherits: false; initial-value: 100%; }
