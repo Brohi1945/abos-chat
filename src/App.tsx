@@ -49,8 +49,8 @@ export default function App() {
     return (
       <ThemeProvider>
         <Toaster position="top-center" />
-        <div className="h-screen flex items-center justify-center bg-slate-950">
-          <Loader2 className="animate-spin text-slate-500" size={22} />
+        <div className="h-screen flex items-center justify-center bg-app">
+          <Loader2 className="animate-spin text-muted" size={22} />
         </div>
       </ThemeProvider>
     );
