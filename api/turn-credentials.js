@@ -2,16 +2,14 @@
 //  GET /api/turn-credentials
 //  Fetches time-limited TURN credentials from metered.ca
 //  Called by the browser before starting a call.
-//  This is Phase 1 + Phase 4 combined — dynamic credentials
-//  from the start.
+//  PHASE 1 + PHASE 4: Dynamic credentials with expiry
 // ============================================================
 
 export const config = {
-  maxDuration: 5, // Should be very fast
+  maxDuration: 5,
 };
 
 export default async function handler(req, res) {
-  // Only allow GET requests
   if (req.method !== "GET") {
     return res.status(405).json({ error: "Method not allowed" });
   }
@@ -21,14 +19,13 @@ export default async function handler(req, res) {
     const apiKey = process.env.METERED_API_KEY;
 
     if (!baseUrl || !apiKey) {
-      console.error("Missing METERED_BASE_URL or METERED_API_KEY in Vercel env");
-      return res.status(500).json({ 
-        error: "TURN service not configured. Set METERED_BASE_URL and METERED_API_KEY in Vercel environment variables." 
+      console.error("Missing METERED_BASE_URL or METERED_API_KEY");
+      return res.status(500).json({
+        error: "TURN service not configured. Set METERED_BASE_URL and METERED_API_KEY in Vercel environment variables.",
       });
     }
 
-    // Call metered.ca's API to get a time-limited credential
-    // Default expiry: 24 hours (86400 seconds) — more than enough for any call
+    // Default expiry: 24 hours (86400 seconds)
     const expiryInSeconds = parseInt(req.query.expiry) || 86400;
 
     const response = await fetch(`${baseUrl}/api/v1/turn/credential`, {
@@ -54,14 +51,6 @@ export default async function handler(req, res) {
 
     const data = await response.json();
 
-    // Metered response format:
-    // {
-    //   "urls": "turn:global.turn.metered.ca:443?transport=tcp",
-    //   "username": "temp-username",
-    //   "credential": "temp-password"
-    // }
-
-    // Format the response for the browser (same as RTCPeerConnection expects)
     return res.status(200).json({
       iceServers: [
         {
@@ -69,7 +58,6 @@ export default async function handler(req, res) {
           username: data.username,
           credential: data.credential,
         },
-        // Fallback STUN servers in case TURN fails
         { urls: "stun:stun.l.google.com:19302" },
         { urls: "stun:stun1.l.google.com:19302" },
       ],
