@@ -1,7 +1,8 @@
 // ============================================================
 //  src/components/CallScreen.tsx
-//  Full-screen active/outgoing call UI.
-//  PHASE 3: Quality badge added (shows connection quality)
+//  Complete Call Screen — Phase 1 to 7
+//  - Call controls
+//  - Quality badge (Phase 3)
 // ============================================================
 
 import React, { useEffect, useRef, useState } from "react";
@@ -20,11 +21,9 @@ interface CallScreenProps {
   onToggleMute: () => void;
   onToggleCamera: () => void;
   onHangup: () => void;
-  // ---- PHASE 3: Quality report from parent ----
   qualityReport?: CallQualityReport | null;
 }
 
-// ---- Helper to get quality color ----
 function getQualityColor(quality: string): string {
   switch (quality) {
     case 'excellent': return 'bg-green-500';
@@ -42,6 +41,16 @@ function getQualityLabel(quality: string): string {
     case 'poor': return 'Weak';
     case 'very-poor': return 'Very Weak';
     default: return '--';
+  }
+}
+
+function getWifiColor(quality: string): string {
+  switch (quality) {
+    case 'excellent': return 'text-green-400';
+    case 'good': return 'text-cyan-400';
+    case 'poor': return 'text-yellow-400';
+    case 'very-poor': return 'text-red-400';
+    default: return 'text-slate-400';
   }
 }
 
@@ -105,27 +114,14 @@ export default function CallScreen({
       .catch(() => {});
   };
 
-  // ---- PHASE 3: Quality badge ----
   const showQuality = phase === "active" && qualityReport;
   const qualityColor = showQuality ? getQualityColor(qualityReport!.quality) : 'bg-slate-500';
   const qualityLabel = showQuality ? getQualityLabel(qualityReport!.quality) : '--';
-  
-  // Get quality icon color based on quality
-  const getWifiColor = (quality: string): string => {
-    switch (quality) {
-      case 'excellent': return 'text-green-400';
-      case 'good': return 'text-cyan-400';
-      case 'poor': return 'text-yellow-400';
-      case 'very-poor': return 'text-red-400';
-      default: return 'text-slate-400';
-    }
-  };
 
   return (
     <div className="fixed inset-0 z-[70] bg-slate-950 flex flex-col">
       {!isVideo && <audio ref={remoteAudioRef} autoPlay />}
 
-      {/* ---- PHASE 3: Quality badge (top-right) ---- */}
       {showQuality && (
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
           <div className="flex items-center gap-1.5 bg-black/60 backdrop-blur-sm rounded-full px-3 py-1.5 border border-white/10">
@@ -139,13 +135,11 @@ export default function CallScreen({
                 <span className="text-slate-400 ml-1">· {Math.round(qualityReport!.rtt)}ms</span>
               )}
             </span>
-            {/* Small dot indicator */}
             <span className={`w-1.5 h-1.5 rounded-full ${qualityColor} ml-0.5`} />
           </div>
         </div>
       )}
 
-      {/* Video / avatar area */}
       <div className="flex-1 relative flex items-center justify-center overflow-hidden">
         {isVideo ? (
           <>
@@ -197,7 +191,6 @@ export default function CallScreen({
         )}
       </div>
 
-      {/* Controls */}
       <div className="p-6 flex items-center justify-center gap-5 shrink-0">
         <button
           onClick={onToggleMute}
