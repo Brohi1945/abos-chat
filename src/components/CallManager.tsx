@@ -4,6 +4,7 @@
 //  PHASE 1: ICE restart / auto-reconnect logic added.
 //  PHASE 1: Dynamic TURN credentials support (await createPeerConnection)
 //  PHASE 2: HD Video + Bitrate Control (onPeerConnectionReady callback)
+//  PHASE 3: Screen Wake Lock + Quality Monitoring
 // ============================================================
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
@@ -24,6 +25,12 @@ import {
   stopStream,
   callingIsSupported,
   setBitrateParameters,
+  requestWakeLock,
+  releaseWakeLock,
+  setupWakeLockAutoRenew,
+  cleanupWakeLockAutoRenew,
+  stopQualityMonitoring,
+  CallQualityReport,
 } from "../lib/webrtc";
 import IncomingCallBanner from "./IncomingCallBanner";
 import CallScreen from "./CallScreen";
@@ -59,6 +66,8 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const [muted, setMuted] = useState(false);
   const [cameraOff, setCameraOff] = useState(false);
   const [mediaError, setMediaError] = useState("");
+  // ---- PHASE 3: Quality report state ----
+  const [qualityReport, setQualityReport] = useState<CallQualityReport | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const signalRef = useRef<ReturnType<typeof openCallSignalChannel> | null>(null);
@@ -165,9 +174,17 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
     restartAttemptedRef.current = false;
     isNegotiatingRef.current = false;
+
+    // PHASE 3: Stop quality monitoring
+    stopQualityMonitoring();
+    setQualityReport(null);
   };
 
   const resetToIdle = () => {
+    // ---- PHASE 3: Release wake lock ----
+    releaseWakeLock();
+    cleanupWakeLockAutoRenew();
+
     cleanupMedia();
     setCall(null);
     setPeerLabel("");
@@ -180,6 +197,10 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const beginActiveCall = async (activeCall: Call, isCaller: boolean) => {
     setPhase("active");
 
+    // ---- PHASE 3: Request Screen Wake Lock ----
+    await requestWakeLock();
+    setupWakeLockAutoRenew();
+
     let stream: MediaStream;
     try {
       stream = await getLocalStream(activeCall.kind);
@@ -191,7 +212,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
     setLocalStream(stream);
 
-    // PHASE 1 + PHASE 2: createPeerConnection with all callbacks
+    // PHASE 1 + PHASE 2 + PHASE 3: createPeerConnection with all callbacks
     const pc = await createPeerConnection({
       onRemoteStream: (s) => setRemoteStream(s),
       onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
@@ -240,6 +261,22 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       onPeerConnectionReady: (readyPc) => {
         setBitrateParameters(readyPc);
         console.log("✅ Phase 2: Bitrate parameters set on peer connection");
+      },
+
+      // ---- PHASE 3: Quality monitoring callback ----
+      onQualityReport: (report: CallQualityReport) => {
+        setQualityReport(report);
+        
+        // Show warning if quality is poor
+        if (report.quality === 'poor' || report.quality === 'very-poor') {
+          console.warn('⚠️ Poor call quality detected:', report);
+          const msg = report.quality === 'very-poor' 
+            ? '⚠️ Connection very weak — call may drop soon' 
+            : '⚠️ Connection weak — quality may be affected';
+          setMediaError(msg);
+          // Auto-clear after 4 seconds
+          setTimeout(() => setMediaError(""), 4000);
+        }
       },
     });
     pcRef.current = pc;
@@ -401,7 +438,11 @@ export default function CallManager({ me, myConversationId, children }: CallMana
 
       {mediaError && (
         <div className="fixed inset-x-0 top-3 z-[80] flex justify-center px-3">
-          <div className="bg-danger/90 text-white text-xs font-medium px-4 py-2 rounded-full shadow-lg">
+          <div className={`text-white text-xs font-medium px-4 py-2 rounded-full shadow-lg ${
+            mediaError.includes('very weak') || mediaError.includes('may drop') 
+              ? 'bg-danger/90' 
+              : 'bg-warning/90'
+          }`}>
             {mediaError}
           </div>
         </div>
@@ -423,6 +464,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
           onToggleMute={toggleMute}
           onToggleCamera={toggleCamera}
           onHangup={hangup}
+          qualityReport={qualityReport}
         />
       )}
     </CallContext.Provider>
