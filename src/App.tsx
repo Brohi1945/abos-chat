@@ -1,3 +1,10 @@
+// ============================================================
+//  src/App.tsx
+//  Complete App — Phase 1 to 7
+//  - Auth gate
+//  - Routes to Customer or Owner screen
+// ============================================================
+
 import React, { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { Toaster } from "react-hot-toast";
@@ -9,10 +16,6 @@ import AuthScreen from "./screens/AuthScreen";
 import CustomerChatScreen from "./screens/CustomerChatScreen";
 import OwnerInboxScreen from "./screens/OwnerInboxScreen";
 
-// Comma-separated list of emails that should see the Owner Inbox even
-// before abos_chat_profiles.role has been flipped to 'owner' in the DB.
-// UI convenience only — actual data access is still gated server-side
-// by Postgres RLS, which only trusts abos_chat_profiles.role = 'owner'.
 const OWNER_EMAILS = (import.meta.env.VITE_OWNER_EMAILS || "")
   .split(",")
   .map((e) => e.trim().toLowerCase())
