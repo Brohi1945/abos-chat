@@ -4,6 +4,7 @@ import { Profile, OwnerInboxRow } from "../lib/types";
 import { getOwnerInbox, signOut, toggleAiMode } from "../lib/chatApi";
 import ChatWindow from "../components/ChatWindow";
 import OrderContextPanel from "../components/OrderContextPanel";
+import CallManager from "../components/CallManager";
 
 interface OwnerInboxScreenProps {
   me: Profile;
@@ -57,6 +58,7 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
   const totalUnread = conversations.reduce((sum, c) => sum + c.unread_count, 0);
 
   return (
+    <CallManager me={me} myConversationId={null}>
     <div className="h-screen flex bg-slate-950">
       {/* Sidebar */}
       <div
@@ -163,5 +165,6 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
         )}
       </div>
     </div>
+    </CallManager>
   );
 }
