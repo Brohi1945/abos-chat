@@ -4,4 +4,15 @@
 
 html, body, #root {
   height: 100%;
+  width: 100%;
+}
+
+html, body {
+  overflow-x: hidden;
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+* {
+  min-width: 0;
 }
