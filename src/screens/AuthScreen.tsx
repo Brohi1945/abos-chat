@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { MessageCircle, Loader2 } from "lucide-react";
 import { signUp, signIn } from "../lib/chatApi";
+import ThemeSwitcher from "../components/ThemeSwitcher";
 
 interface AuthScreenProps {
   onAuthed: () => void;
@@ -40,6 +41,9 @@ export default function AuthScreen({ onAuthed }: AuthScreenProps) {
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4 bg-slate-950">
+      <div className="fixed top-4 right-4">
+        <ThemeSwitcher compact />
+      </div>
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center mb-8">
           <div className="w-14 h-14 rounded-2xl bg-brand flex items-center justify-center mb-3">
