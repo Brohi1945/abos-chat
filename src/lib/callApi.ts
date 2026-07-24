@@ -65,6 +65,12 @@ export async function createCall(
   }
 
   // ---- PHASE 6: Check if user is already on a call ----
+  // NOTE: a Postgres trigger (abos_chat_reap_stale_calls, applied
+  // 2026-07-24) now auto-closes any 'ringing'/'waiting' row older than
+  // 45s and any 'active' row older than 4h *before* this insert even
+  // lands — so a call that died without a clean hangup (tab closed,
+  // app killed, crash) can no longer make every future call in this
+  // conversation get stuck showing "Already on a call" forever.
   if (me.role === 'customer') {
     // Check for active calls in this conversation
     const { data: activeCall } = await supabase
@@ -76,10 +82,15 @@ export async function createCall(
 
     if (activeCall) {
       // Mark this call as waiting
-      await supabase
+      const { error: waitingError } = await supabase
         .from('abos_chat_calls')
         .update({ status: 'waiting' })
         .eq('id', data.id);
+      if (waitingError) {
+        console.error('Failed to mark call as waiting:', waitingError);
+      } else {
+        (data as any).status = 'waiting';
+      }
     }
   }
 
@@ -201,6 +212,48 @@ export async function endCall(
 }
 
 // ============================================================
+//  End-call "beacon" — fires on tab close / app background-kill
+// ============================================================
+// A normal endCall() (above) is a multi-step async flow: it won't
+// reliably finish if the tab is being torn down right now. This is a
+// single best-effort fire-and-forget PATCH straight to the REST API
+// with `keepalive: true`, so the browser is allowed to complete it even
+// after the page has already unloaded. It only flips the row's status —
+// it does NOT insert the call-log message or touch profiles (that full
+// cleanup still happens normally whenever anyone opens the app next,
+// via the reap trigger). Goal: the *other* person sees "call ended"
+// within a second or two instead of the call hanging until the 45s/4h
+// server-side reap catches it.
+export function endCallBeacon(
+  callId: string,
+  status: "ended" | "missed" | "declined"
+): void {
+  try {
+    const url = (import.meta as any).env.VITE_SUPABASE_URL;
+    const anonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY;
+    if (!url || !anonKey) return;
+
+    const endpoint = `${url}/rest/v1/abos_chat_calls?id=eq.${encodeURIComponent(callId)}&status=in.(ringing,active,waiting)`;
+
+    fetch(endpoint, {
+      method: "PATCH",
+      keepalive: true,
+      headers: {
+        "Content-Type": "application/json",
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+        Prefer: "return=minimal",
+      },
+      body: JSON.stringify({ status, ended_at: new Date().toISOString() }),
+    }).catch(() => {
+      // best-effort only — the reap trigger is the real safety net
+    });
+  } catch {
+    // ignore — never let cleanup crash the unload path
+  }
+}
+
+// ============================================================
 //  Get Profile Name
 // ============================================================
 
@@ -269,6 +322,36 @@ export function subscribeToCallRow(callId: string, onUpdate: (call: Call) => voi
     .subscribe();
 
   return () => supabase.removeChannel(channel);
+}
+
+// ============================================================
+//  Ring acknowledgement — drives "Calling…" vs "Ringing…"
+// ============================================================
+// WhatsApp-style distinction: the caller shows "Calling…" until we get
+// proof the other device actually received the incoming call (i.e. its
+// IncomingCallBanner is on screen), then flips to "Ringing…". If the
+// other side has no network / the app isn't open, no ack ever arrives,
+// so it correctly stays on "Calling…" until the ring times out.
+
+export function subscribeToRingAck(callId: string, onRingAck: () => void) {
+  const channel = supabase.channel(`call-ring-${callId}`, {
+    config: { broadcast: { self: false } },
+  });
+  channel.on("broadcast", { event: "ring-ack" }, () => onRingAck());
+  channel.subscribe();
+  return () => supabase.removeChannel(channel);
+}
+
+export function sendRingAck(callId: string): void {
+  const channel = supabase.channel(`call-ring-${callId}`, {
+    config: { broadcast: { self: false } },
+  });
+  channel.subscribe((status) => {
+    if (status === "SUBSCRIBED") {
+      channel.send({ type: "broadcast", event: "ring-ack", payload: {} });
+      setTimeout(() => supabase.removeChannel(channel), 1500);
+    }
+  });
 }
 
 // ============================================================
