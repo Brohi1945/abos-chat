@@ -113,6 +113,8 @@ export default function CallScreen({
     const el = isVideo ? remoteVideoRef.current : remoteAudioRef.current;
     if (!el) return;
     el.srcObject = remoteStream;
+    el.muted = false;
+    el.volume = 1;
     if (!remoteStream) return;
     el.play()
       .then(() => setNeedsAudioUnlock(false))
@@ -126,13 +128,28 @@ export default function CallScreen({
       .catch(() => {});
   };
 
+  // Retry automatically whenever the tab/app comes back to the
+  // foreground — some mobile browsers suspend media elements while
+  // backgrounded and need a fresh play() call, not just a re-render.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") unlockAudio();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remoteStream, isVideo]);
+
   const showQuality = phase === "active" && qualityReport;
   const qualityColor = showQuality ? getQualityColor(qualityReport!.quality) : 'bg-slate-500';
   const qualityLabel = showQuality ? getQualityLabel(qualityReport!.quality) : '--';
 
   return (
-    <div className="fixed inset-0 z-[70] bg-slate-950 flex flex-col">
-      {!isVideo && <audio ref={remoteAudioRef} autoPlay />}
+    <div
+      className="fixed inset-0 z-[70] bg-slate-950 flex flex-col"
+      onClick={needsAudioUnlock ? unlockAudio : undefined}
+    >
+      {!isVideo && <audio ref={remoteAudioRef} autoPlay playsInline />}
 
       {showQuality && (
         <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
