@@ -1,5 +1,5 @@
 // src/components/CallManager.tsx
-// (Full file with fix — signaling channel created BEFORE adding tracks)
+// FIXED: signaling channel created BEFORE adding tracks, added debug logs
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Profile, Call, CallKind } from "../lib/types";
@@ -75,11 +75,6 @@ export default function CallManager({ me, myConversationId, children }: CallMana
 
   const respondingRef = useRef(false);
   const startingCallRef = useRef(false);
-
-  const restartAttemptedRef = useRef(false);
-  const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resetRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isNegotiatingRef = useRef(false);
 
   const callRef = useRef<Call | null>(null);
   const phaseRef = useRef<Phase>("idle");
@@ -185,18 +180,6 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     ringAckUnsubRef.current();
     ringAckUnsubRef.current = () => {};
     pendingIceRef.current = [];
-
-    if (restartTimeoutRef.current) {
-      clearTimeout(restartTimeoutRef.current);
-      restartTimeoutRef.current = null;
-    }
-    if (resetRestartTimeoutRef.current) {
-      clearTimeout(resetRestartTimeoutRef.current);
-      resetRestartTimeoutRef.current = null;
-    }
-    restartAttemptedRef.current = false;
-    isNegotiatingRef.current = false;
-
     stopQualityMonitoring();
     setQualityReport(null);
   };
@@ -216,6 +199,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   };
 
   const beginActiveCall = async (activeCall: Call, isCaller: boolean) => {
+    console.log("[CallManager] beginActiveCall, isCaller:", isCaller);
     setPhase("active");
 
     callRowUnsubRef.current = subscribeToCallRow(activeCall.id, (updated) => {
@@ -239,51 +223,28 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setLocalStream(stream);
 
     const pc = await createPeerConnection({
-      onRemoteStream: (s) => setRemoteStream(s),
-      onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
-
+      onRemoteStream: (s) => {
+        console.log("[CallManager] Remote stream received, audio tracks:", s.getAudioTracks().length);
+        setRemoteStream(s);
+      },
+      onIceCandidate: (candidate) => {
+        console.log("[CallManager] Sending ICE candidate:", candidate);
+        signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id });
+      },
       onIceConnectionStateChange: (state) => {
-        if (phaseRef.current !== "active") return;
-        if (state === "disconnected" || state === "failed") {
-          if (restartAttemptedRef.current) return;
-          restartAttemptedRef.current = true;
-
-          if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
-          restartTimeoutRef.current = setTimeout(() => {
-            if (phaseRef.current !== "active") return;
-            if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
-              restartAttemptedRef.current = false;
-              return;
-            }
-            try {
-              pc.restartIce();
-            } catch (err) {
-              console.error("ICE restart failed:", err);
-            }
-
-            if (resetRestartTimeoutRef.current) clearTimeout(resetRestartTimeoutRef.current);
-            resetRestartTimeoutRef.current = setTimeout(() => {
-              restartAttemptedRef.current = false;
-            }, 10000);
-          }, 2500);
-        } else if (state === "connected" || state === "completed") {
-          restartAttemptedRef.current = false;
-          if (restartTimeoutRef.current) {
-            clearTimeout(restartTimeoutRef.current);
-            restartTimeoutRef.current = null;
-          }
+        console.log("[CallManager] ICE connection state:", state);
+        if (state === "connected" || state === "completed") {
+          console.log("[CallManager] ICE connected — media should flow");
         }
       },
-
       onPeerConnectionReady: (readyPc) => {
         setBitrateParameters(readyPc);
-        console.log("✅ Phase 2: Bitrate parameters set");
+        console.log("✅ Bitrate parameters set");
       },
-
-      onQualityReport: (report: CallQualityReport) => {
+      onQualityReport: (report) => {
         setQualityReport(report);
         if (report.quality === 'poor' || report.quality === 'very-poor') {
-          console.warn('⚠️ Poor call quality detected:', report);
+          console.warn('⚠️ Poor call quality:', report);
           const msg = report.quality === 'very-poor'
             ? '⚠️ Connection very weak — call may drop soon'
             : '⚠️ Connection weak — quality may be affected';
@@ -294,6 +255,40 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     });
     pcRef.current = pc;
 
+    // ---- Create signal channel BEFORE adding tracks ----
+    console.log("[CallManager] Creating signal channel");
+    const signal = openCallSignalChannel(activeCall.id, me.id, async (msg: SignalMessage) => {
+      console.log("[CallManager] Signal message received:", msg.type);
+      if (msg.type === "offer") {
+        await pc.setRemoteDescription(msg.sdp);
+        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
+        pendingIceRef.current = [];
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        signal.send({ type: "answer", sdp: answer, from: me.id });
+        console.log("[CallManager] Sent answer");
+      } else if (msg.type === "answer") {
+        await pc.setRemoteDescription(msg.sdp);
+        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
+        pendingIceRef.current = [];
+        console.log("[CallManager] Set remote description (answer)");
+      } else if (msg.type === "ice-candidate") {
+        if (pc.remoteDescription) {
+          await pc.addIceCandidate(msg.candidate);
+          console.log("[CallManager] Added ICE candidate");
+        } else {
+          pendingIceRef.current.push(msg.candidate);
+          console.log("[CallManager] Pending ICE candidate (remote desc not set)");
+        }
+      } else if (msg.type === "hangup") {
+        await endCall(activeCall, "ended", me);
+        resetToIdle();
+      }
+    });
+    signalRef.current = signal;
+    // ------------------------------------------------
+
+    // ---- Set up negotiation needed handler ----
     const prevNegotiationHandler = pc.onnegotiationneeded;
     pc.onnegotiationneeded = async (ev) => {
       if (prevNegotiationHandler) {
@@ -304,47 +299,25 @@ export default function CallManager({ me, myConversationId, children }: CallMana
         }
       }
 
-      if (isNegotiatingRef.current) return;
       if (!isCaller) return;
-
-      isNegotiatingRef.current = true;
+      console.log("[CallManager] onnegotiationneeded fired, creating offer");
       try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         signalRef.current?.send({ type: "offer", sdp: offer, from: me.id });
+        console.log("[CallManager] Sent offer");
       } catch (err) {
-        console.error("Negotiation needed failed:", err);
-      } finally {
-        isNegotiatingRef.current = false;
+        console.error("Failed to create/send offer:", err);
       }
     };
+    // ------------------------------------------------
 
-    // ========== FIX: Create signal channel BEFORE adding tracks ==========
-    const signal = openCallSignalChannel(activeCall.id, me.id, async (msg: SignalMessage) => {
-      if (msg.type === "offer") {
-        await pc.setRemoteDescription(msg.sdp);
-        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
-        pendingIceRef.current = [];
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        signal.send({ type: "answer", sdp: answer, from: me.id });
-      } else if (msg.type === "answer") {
-        await pc.setRemoteDescription(msg.sdp);
-        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
-        pendingIceRef.current = [];
-      } else if (msg.type === "ice-candidate") {
-        if (pc.remoteDescription) await pc.addIceCandidate(msg.candidate);
-        else pendingIceRef.current.push(msg.candidate);
-      } else if (msg.type === "hangup") {
-        await endCall(activeCall, "ended", me);
-        resetToIdle();
-      }
+    // ---- Finally, add tracks ----
+    stream.getTracks().forEach((t) => {
+      pc.addTrack(t, stream);
+      console.log("[CallManager] Added track:", t.kind);
     });
-    signalRef.current = signal;
-    // ================================================================
-
-    // Now add tracks (signal channel is already set)
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    // If caller, the negotiationneeded will fire after this
   };
 
   const startCall = async (conversationId: string, kind: CallKind, label: string) => {
