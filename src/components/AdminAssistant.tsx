@@ -8,6 +8,7 @@ import { useVoiceInput } from "../lib/useVoiceInput";
 import { useVoiceOutput } from "../lib/useVoiceOutput";
 import { detectVoiceToggleCommand, detectThemeCommand } from "../lib/voiceCommands";
 import { toastError, toastSuccess } from "../lib/toast";
+import { useCall } from "./CallManager";
 
 interface Message {
   role: "user" | "bot";
@@ -51,17 +52,22 @@ export default function AdminAssistant({
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "bot",
-      text: `Salam! Main ${ASSISTANT_NAME} hoon. Aapke inbox ka live data mere paas hai — reply bhejwana ho, status/tags badalne hon, ya theme change karni ho, bol kar ya likh kar bata dein.`,
+      text: `Salam! Main ${ASSISTANT_NAME} hoon. Aapke inbox ka live data mere paas hai — reply bhejwana ho, kisi customer ki chat kholni ho, usse call milani ho, ya status/tags badalne hon, bol kar ya likh kar bata dein.`,
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const suggestions = selected
-    ? ["Is customer ko batao order kab tak deliver hoga", "Iss conversation ko urgent kar do", "AI auto-reply on kar do", "Colorful theme laga do"]
-    : ["Kitni conversations open hain", "Urgent conversations dikhao", "Dark theme laga do", "Colorful theme laga do"];
+    ? ["Is customer ko batao order kab tak deliver hoga", "Isko voice call milao", "Iss conversation ko urgent kar do", "AI auto-reply on kar do"]
+    : ["Kitni conversations open hain", "Ahmed wali chat kholo", "Urgent conversations dikhao", "Colorful theme laga do"];
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
   const { mode: themeMode, setTheme } = useTheme();
+  // Same CallManager instance OwnerInboxScreen already wraps this
+  // component in — ABI places calls exactly the way tapping the
+  // phone/video icon in ChatWindow's header would (same ringing UI,
+  // same DB rows, same everything).
+  const { startCall } = useCall();
 
   const THEME_LABELS: Record<string, string> = {
     light: "Light",
@@ -175,6 +181,28 @@ export default function AdminAssistant({
       onOpenBroadcastDraft(action.text, action.tag);
       return;
     }
+
+    if (action.type === "start_call") {
+      // "query" given -> find + open that customer first, same as
+      // select_conversation. No query -> use whatever's already open.
+      let target = selected;
+      if (action.query) {
+        const match = findConversation(action.query);
+        if (!match) {
+          addBotMessage(`"${action.query}" se milti koi conversation nahi mili.`);
+          return;
+        }
+        target = match;
+        onSelectConversation(match);
+      }
+      if (!target) {
+        addBotMessage("Kis customer ko call karni hai? Naam ya number bata dein, ya pehle conversation select kar lein.");
+        return;
+      }
+      const label = target.customer_name || target.customer_email || "Customer";
+      startCall(target.id, action.kind, label);
+      return;
+    }
   };
 
   const buildSystemPrompt = () => {
@@ -190,7 +218,7 @@ export default function AdminAssistant({
       ? `Currently SELECTED conversation: ${selected.customer_name || selected.customer_email || "Customer"} (${selected.customer_number}), status=${selected.status}, ai_mode=${selected.ai_mode}, tags=${(selected.tags || []).join(",") || "none"}.`
       : "No conversation is currently selected.";
 
-    return `You are "${ASSISTANT_NAME}" — the admin's assistant for the ABOS Chat inbox (${me.role === "owner" ? "Owner" : "Agent"}: ${me.name || me.email}). You help the admin manage customer conversations by voice or text: sending replies, changing conversation status/tags, toggling AI auto-reply, filtering the inbox, selecting a conversation, and drafting broadcasts.
+    return `You are "${ASSISTANT_NAME}" — the admin's assistant for the ABOS Chat inbox (${me.role === "owner" ? "Owner" : "Agent"}: ${me.name || me.email}). You help the admin manage customer conversations by voice or text: sending replies, opening a customer's chat, placing voice/video calls, changing conversation status/tags, toggling AI auto-reply, filtering the inbox, and drafting broadcasts.
 
 Conversations (most recent first, id | name (number) | status | ai_mode | unread | tags):
 ${list || "No conversations yet."}
@@ -206,12 +234,14 @@ Valid "action" values (omit or use null if the admin is just asking a question):
 - {"type":"set_status","status":"open"|"pending"|"urgent"|"resolved"} — change the selected conversation's status
 - {"type":"set_tags","tags":["tag1","tag2"]} — replace the selected conversation's tags
 - {"type":"filter_status","status":"all"|"open"|"pending"|"urgent"|"resolved"} — change which status tab the inbox list shows
-- {"type":"select_conversation","query":"name or number to search for"} — open a different conversation
+- {"type":"select_conversation","query":"name or number to search for"} — open a different customer's chat screen
 - {"type":"prepare_broadcast","text":"...","tag":"optional tag"} — draft a broadcast message (this only opens the composer pre-filled, it never sends by itself — always tell the admin they still need to tap Send)
+- {"type":"start_call","kind":"voice"|"video","query":"optional name or number"} — place a real voice or video call to a customer. If "query" is given, open that customer's chat first, then call them. If omitted, call whoever's currently selected.
 
 Rules:
 - Never invent data that isn't in the conversation list above.
 - Only use send_message/toggle_ai_mode/set_status/set_tags when a conversation is selected; if none is selected, ask the admin to pick one instead of guessing.
+- start_call is the one exception: it can include "query" even when nothing is selected yet — you don't need the admin to select first, just include who to call in "query".
 - Keep "reply" short — it may be read aloud.
 - Do not use markdown formatting (no **, no bullet lists) since replies may be spoken.`;
   };
