@@ -1,12 +1,6 @@
+// src/components/IncomingCallBanner.tsx
 
-// ============================================================
-//  src/components/IncomingCallBanner.tsx
-//  Complete Incoming Call Banner — Phase 1 to 7
-//  - Ringtone + Vibration
-//  - Call waiting support (Phase 6)
-// ============================================================
-
-import React, { useEffect } from "react";
+import React, { useEffect, useRef } from "react";
 import { Phone, PhoneOff, Video, Clock } from "lucide-react";
 import { Call } from "../lib/types";
 
@@ -15,9 +9,16 @@ interface IncomingCallBannerProps {
   peerLabel: string;
   onAccept: () => void;
   onDecline: () => void;
+  /** True while an Accept/Decline tap is already being processed — disables both buttons so a second tap can't fire. */
+  busy?: boolean;
 }
 
 function useRingtone() {
+  // Holds the real stop() function for whichever AudioContext is
+  // currently playing, so callers (Accept/Decline) can silence it
+  // synchronously instead of waiting for the component to unmount.
+  const stopRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
     const ctx = AudioCtx ? new AudioCtx() : null;
@@ -57,16 +58,37 @@ function useRingtone() {
     ringCycle();
     const interval = setInterval(ringCycle, RING_CYCLE_MS);
 
-    return () => {
+    const stop = () => {
       clearInterval(interval);
       ctx?.close().catch(() => {});
       navigator.vibrate?.(0);
     };
+    stopRef.current = stop;
+
+    return stop;
   }, []);
+
+  // stop() is idempotent (clearInterval/ctx.close on already-stopped
+  // values are harmless), so it's safe to call this more than once —
+  // e.g. once from handleAccept and again from the effect cleanup.
+  return () => stopRef.current();
 }
 
-export default function IncomingCallBanner({ call, peerLabel, onAccept, onDecline }: IncomingCallBannerProps) {
-  useRingtone();
+export default function IncomingCallBanner({ call, peerLabel, onAccept, onDecline, busy }: IncomingCallBannerProps) {
+  const stopRingtone = useRingtone();
+
+  // Kill the tone the instant a button is tapped — don't wait for
+  // claimCall()/endCall() to resolve and the parent to change phase,
+  // which is what used to happen and could leave the ring overlapping
+  // the first moment of real call audio.
+  const handleAccept = () => {
+    stopRingtone();
+    onAccept();
+  };
+  const handleDecline = () => {
+    stopRingtone();
+    onDecline();
+  };
 
   const isWaiting = call.status === 'waiting';
 
@@ -85,17 +107,18 @@ export default function IncomingCallBanner({ call, peerLabel, onAccept, onDeclin
           </div>
         </div>
         <button
-          onClick={onDecline}
-          className="w-10 h-10 rounded-full bg-danger text-white flex items-center justify-center shrink-0"
+          onClick={handleDecline}
+          disabled={busy}
+          className="w-10 h-10 rounded-full bg-danger text-white flex items-center justify-center shrink-0 disabled:opacity-50"
           aria-label="Decline"
         >
           <PhoneOff size={16} />
         </button>
         <button
-          onClick={onAccept}
-          disabled={isWaiting}
+          onClick={handleAccept}
+          disabled={isWaiting || busy}
           className={`w-10 h-10 rounded-full text-white flex items-center justify-center shrink-0 ${
-            isWaiting ? 'bg-slate-500 cursor-not-allowed' : 'bg-success hover:bg-success/80'
+            isWaiting || busy ? 'bg-slate-500 cursor-not-allowed' : 'bg-success hover:bg-success/80'
           }`}
           aria-label="Accept"
         >
@@ -105,4 +128,3 @@ export default function IncomingCallBanner({ call, peerLabel, onAccept, onDeclin
     </div>
   );
 }
-
