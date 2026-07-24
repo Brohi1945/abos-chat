@@ -25,7 +25,13 @@ export type AdminAssistantAction =
   // Places a real voice/video call the same way tapping the phone/video
   // icon in ChatWindow's header would — "query" (name/number) is
   // optional: omit it to call whoever's currently selected.
-  | { type: "start_call"; kind: "voice" | "video"; query?: string };
+  | { type: "start_call"; kind: "voice" | "video"; query?: string }
+  // Shares the ADMIN's current device location into the selected
+  // conversation — same as tapping the pin icon in ChatWindow. Uses
+  // navigator.geolocation, so it always needs the admin's own browser
+  // permission grant; nothing here can silently read location without
+  // that OS/browser prompt.
+  | { type: "send_location" };
 
 export async function callAdminAssistant(
   systemPrompt: string,
