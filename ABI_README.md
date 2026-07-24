@@ -108,7 +108,12 @@ actually change it, always per the confirmation rules in §5).
 
 ### Calls (ABOS Chat, Phase 5 feature)
 - **Read:** recent call log, missed calls.
-- **Write:** n/a — placing/answering a call isn't something to voice-command into existing mid-call.
+- **Write:** placing a voice/video call to a customer, by voice or text
+  command (`start_call` action, implemented 2026-07-24) — same as
+  tapping the phone/video icon in ChatWindow's header, just voice/text
+  triggered. Does NOT cover mid-call actions (mute, hangup, answering an
+  incoming ring) — those still require the admin to physically tap, on
+  purpose, since a live call already has its own on-screen controls.
 
 ## 4. Architecture
 
