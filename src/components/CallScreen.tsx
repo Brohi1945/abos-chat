@@ -3,6 +3,7 @@
 //  Complete Call Screen — Phase 1 to 7
 //  - Call controls
 //  - Quality badge (Phase 3)
+//  - Calling… / Ringing… status (WhatsApp-style)
 // ============================================================
 
 import React, { useEffect, useRef, useState } from "react";
@@ -13,6 +14,11 @@ import { CallQualityReport } from "../lib/webrtc";
 interface CallScreenProps {
   call: Call;
   phase: "outgoing" | "active";
+  /** Only meaningful while phase === "outgoing". "calling" until the other
+   *  device's IncomingCallBanner has actually mounted and acked back —
+   *  if they have no network / app closed, this never flips and it just
+   *  keeps showing "Calling…" until the ring times out, same as WhatsApp. */
+  ringStatus?: "calling" | "ringing";
   peerLabel: string;
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
@@ -76,6 +82,7 @@ function formatDuration(totalSeconds: number): string {
 export default function CallScreen({
   call,
   phase,
+  ringStatus = "calling",
   peerLabel,
   localStream,
   remoteStream,
@@ -92,6 +99,11 @@ export default function CallScreen({
   const elapsed = useElapsedSeconds(phase === "active" ? call.answered_at : null);
   const isVideo = call.kind === "video";
   const [needsAudioUnlock, setNeedsAudioUnlock] = useState(false);
+
+  // "Calling…" while we're waiting for proof it reached the other
+  // device, "Ringing…" once it has (their phone/app is actually alerting
+  // them now) — same distinction WhatsApp makes.
+  const outgoingLabel = ringStatus === "ringing" ? "Ringing…" : "Calling…";
 
   useEffect(() => {
     if (localVideoRef.current) localVideoRef.current.srcObject = localStream;
@@ -151,7 +163,7 @@ export default function CallScreen({
             />
             {!remoteStream && (
               <div className="absolute inset-0 flex items-center justify-center text-slate-500 text-sm">
-                {phase === "outgoing" ? "Ringing…" : "Connecting…"}
+                {phase === "outgoing" ? outgoingLabel : "Connecting…"}
               </div>
             )}
             <video
@@ -169,14 +181,14 @@ export default function CallScreen({
             </div>
             <div className="text-lg font-semibold text-white">{peerLabel}</div>
             <div className="text-sm text-slate-400">
-              {phase === "outgoing" ? "Ringing…" : formatDuration(elapsed)}
+              {phase === "outgoing" ? outgoingLabel : formatDuration(elapsed)}
             </div>
           </div>
         )}
 
         {isVideo && (
           <div className="absolute top-4 left-4 bg-black/40 rounded-full px-3 py-1.5 text-xs font-medium text-white">
-            {peerLabel} · {phase === "outgoing" ? "Ringing…" : formatDuration(elapsed)}
+            {peerLabel} · {phase === "outgoing" ? outgoingLabel : formatDuration(elapsed)}
           </div>
         )}
 
