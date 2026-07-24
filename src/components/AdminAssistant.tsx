@@ -52,13 +52,13 @@ export default function AdminAssistant({
   const [messages, setMessages] = useState<Message[]>([
     {
       role: "bot",
-      text: `Salam! Main ${ASSISTANT_NAME} hoon. Aapke inbox ka live data mere paas hai — reply bhejwana ho, kisi customer ki chat kholni ho, usse call milani ho, ya status/tags badalne hon, bol kar ya likh kar bata dein.`,
+      text: `Salam! Main ${ASSISTANT_NAME} hoon. Aapke inbox ka live data mere paas hai — reply bhejwana ho, kisi customer ki chat kholni ho, usse call milani ho, location bhejni ho, ya status/tags badalne hon, bol kar ya likh kar bata dein.`,
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const suggestions = selected
-    ? ["Is customer ko batao order kab tak deliver hoga", "Isko voice call milao", "Iss conversation ko urgent kar do", "AI auto-reply on kar do"]
+    ? ["Is customer ko batao order kab tak deliver hoga", "Isko voice call milao", "Location bhej do", "Iss conversation ko urgent kar do"]
     : ["Kitni conversations open hain", "Ahmed wali chat kholo", "Urgent conversations dikhao", "Colorful theme laga do"];
   const endRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -66,8 +66,10 @@ export default function AdminAssistant({
   // Same CallManager instance OwnerInboxScreen already wraps this
   // component in — ABI places calls exactly the way tapping the
   // phone/video icon in ChatWindow's header would (same ringing UI,
-  // same DB rows, same everything).
-  const { startCall } = useCall();
+  // same DB rows, same everything). `callPhase` lets ABI know the
+  // instant a call is ringing/active so it can go fully quiet.
+  const { startCall, phase: callPhase } = useCall();
+  const callInProgress = callPhase !== "idle";
 
   const THEME_LABELS: Record<string, string> = {
     light: "Light",
@@ -85,18 +87,43 @@ export default function AdminAssistant({
 
   // Voice command: admin can speak commands too ("iss conversation ko
   // resolved kar do") — whatever's said is sent straight through send().
-  // pause: isSpeaking — mic mutes itself while ABI is talking so it
-  // never picks up its own voice as a new command.
-  const { isSupported: voiceSupported, isListening, interimTranscript, toggleListening } = useVoiceInput({
+  // pause: isSpeaking (mic mutes while ABI is talking, so it never picks
+  // up its own voice) OR callInProgress (mic mutes for the ENTIRE
+  // duration of any ringing/active call — a live call already has its
+  // own mic via getUserMedia, and ABI has no business listening in on a
+  // call or answering over it).
+  const { isSupported: voiceSupported, isListening, interimTranscript, toggleListening, stopListening } = useVoiceInput({
     onResult: (transcript) => send(transcript),
     onError: (message) => toastError(message),
     lang: "en-US",
-    pause: isSpeaking,
+    pause: isSpeaking || callInProgress,
   });
+
+  // ---- Go completely silent + get out of the way the instant any call
+  // starts (outgoing, incoming, or active) — this is what makes ABI stop
+  // "running in the background" during a call. Mic already stops via the
+  // `pause` flag above; this additionally cuts short any TTS speech in
+  // progress and auto-minimizes the full-screen panel so the call screen
+  // isn't competing with it. Everything resumes automatically once
+  // callPhase goes back to "idle". ----
+  const prevCallInProgressRef = useRef(false);
+  useEffect(() => {
+    if (callInProgress && !prevCallInProgressRef.current) {
+      stopListening();
+      if (ttsSupported && isSpeaking) {
+        // Cuts off mid-sentence TTS immediately rather than letting it
+        // finish over the call's own ringing/audio.
+        window.speechSynthesis?.cancel();
+      }
+      if (mode === "full") onMinimize();
+    }
+    prevCallInProgressRef.current = callInProgress;
+  }, [callInProgress]);
 
   const addBotMessage = (text: string) => {
     setMessages((m) => [...m, { role: "bot", text }]);
-    speak(text);
+    // Never speak over/into a live or ringing call.
+    if (!callInProgress) speak(text);
   };
 
   // Very small, forgiving fuzzy match against name / number / email —
@@ -129,8 +156,54 @@ export default function AdminAssistant({
         body: action.text,
         ...identity,
       });
-      if (ok) toastSuccess("Reply bhej diya.");
-      else toastError("Reply bhejne mein masla hua.");
+      if (ok) {
+        toastSuccess("Reply bhej diya.");
+      } else {
+        // IMPORTANT: this is the actual outcome, not the LLM's guess.
+        // The chat bubble above already said "sent" (that's just the
+        // model's spoken-friendly reply, written before this ran) — if
+        // the real send failed, ABI now says so explicitly in the chat
+        // (and out loud, if voice is on) instead of only flashing a
+        // toast the admin could easily miss.
+        toastError("Reply bhejne mein masla hua.");
+        addBotMessage("Sorry — message actually nahi ja saka (network ya server issue). Dobara try karein.");
+      }
+      return;
+    }
+
+    if (action.type === "send_location") {
+      if (!selected) {
+        addBotMessage("Location kis conversation mein bhejni hai? Pehle ek conversation select karein.");
+        return;
+      }
+      if (!navigator.geolocation) {
+        addBotMessage("Is browser/device mein location support nahi hai.");
+        return;
+      }
+      const identity = { senderName: me.name || me.email || undefined, senderTitle: (me.role === "owner" ? "Owner" : "Agent") as "Owner" | "Agent" };
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const ok = await sendMessage({
+            conversationId: selected.id,
+            senderId: me.id,
+            senderRole: "owner",
+            kind: "location",
+            lat: pos.coords.latitude,
+            lng: pos.coords.longitude,
+            ...identity,
+          });
+          if (ok) addBotMessage("Location bhej di.");
+          else addBotMessage("Location bhejne mein masla hua — dobara try karein.");
+        },
+        (err) => {
+          let msg = "Location access nahi mil saki.";
+          if (err.code === 1) msg = "Location permission denied hai — browser settings mein allow karein.";
+          if (err.code === 2) msg = "Location unavailable hai — GPS/network check karein.";
+          if (err.code === 3) msg = "Location request timeout ho gaya.";
+          addBotMessage(msg);
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
       return;
     }
 
@@ -139,7 +212,8 @@ export default function AdminAssistant({
         addBotMessage("Kis conversation ke liye? Pehle ek conversation select karein.");
         return;
       }
-      await toggleAiMode(selected.id, action.enabled);
+      const ok = await toggleAiMode(selected.id, action.enabled);
+      if (!ok) addBotMessage("AI auto-reply badalne mein masla hua — dobara try karein.");
       onDataChanged();
       return;
     }
@@ -150,7 +224,8 @@ export default function AdminAssistant({
         return;
       }
       if (!STATUS_VALUES.includes(action.status)) return;
-      await updateConversationStatus(selected.id, action.status);
+      const ok = await updateConversationStatus(selected.id, action.status);
+      if (!ok) addBotMessage("Status badalne mein masla hua — dobara try karein.");
       onDataChanged();
       return;
     }
@@ -160,7 +235,8 @@ export default function AdminAssistant({
         addBotMessage("Kis conversation ke tags? Pehle ek conversation select karein.");
         return;
       }
-      await updateConversationTags(selected.id, action.tags);
+      const ok = await updateConversationTags(selected.id, action.tags);
+      if (!ok) addBotMessage("Tags badalne mein masla hua — dobara try karein.");
       onDataChanged();
       return;
     }
@@ -183,6 +259,10 @@ export default function AdminAssistant({
     }
 
     if (action.type === "start_call") {
+      if (callInProgress) {
+        addBotMessage("Pehle se hi ek call chal rahi hai.");
+        return;
+      }
       // "query" given -> find + open that customer first, same as
       // select_conversation. No query -> use whatever's already open.
       let target = selected;
@@ -218,7 +298,7 @@ export default function AdminAssistant({
       ? `Currently SELECTED conversation: ${selected.customer_name || selected.customer_email || "Customer"} (${selected.customer_number}), status=${selected.status}, ai_mode=${selected.ai_mode}, tags=${(selected.tags || []).join(",") || "none"}.`
       : "No conversation is currently selected.";
 
-    return `You are "${ASSISTANT_NAME}" — the admin's assistant for the ABOS Chat inbox (${me.role === "owner" ? "Owner" : "Agent"}: ${me.name || me.email}). You help the admin manage customer conversations by voice or text: sending replies, opening a customer's chat, placing voice/video calls, changing conversation status/tags, toggling AI auto-reply, filtering the inbox, and drafting broadcasts.
+    return `You are "${ASSISTANT_NAME}" — the admin's assistant for the ABOS Chat inbox (${me.role === "owner" ? "Owner" : "Agent"}: ${me.name || me.email}). You help the admin manage customer conversations by voice or text: sending replies, opening a customer's chat, placing voice/video calls, sharing your (the admin's) current location, changing conversation status/tags, toggling AI auto-reply, filtering the inbox, and drafting broadcasts.
 
 Conversations (most recent first, id | name (number) | status | ai_mode | unread | tags):
 ${list || "No conversations yet."}
@@ -230,6 +310,7 @@ Respond with STRICT JSON ONLY, no markdown, no code fences, in this exact shape:
 
 Valid "action" values (omit or use null if the admin is just asking a question):
 - {"type":"send_message","text":"..."} — send a text reply in the currently selected conversation
+- {"type":"send_location"} — share the admin's current device location in the currently selected conversation (needs a conversation selected; browser will ask the admin for location permission if not already granted)
 - {"type":"toggle_ai_mode","enabled":true|false} — turn AI auto-reply on/off for the selected conversation
 - {"type":"set_status","status":"open"|"pending"|"urgent"|"resolved"} — change the selected conversation's status
 - {"type":"set_tags","tags":["tag1","tag2"]} — replace the selected conversation's tags
@@ -240,8 +321,9 @@ Valid "action" values (omit or use null if the admin is just asking a question):
 
 Rules:
 - Never invent data that isn't in the conversation list above.
-- Only use send_message/toggle_ai_mode/set_status/set_tags when a conversation is selected; if none is selected, ask the admin to pick one instead of guessing.
+- Only use send_message/send_location/toggle_ai_mode/set_status/set_tags when a conversation is selected; if none is selected, ask the admin to pick one instead of guessing.
 - start_call is the one exception: it can include "query" even when nothing is selected yet — you don't need the admin to select first, just include who to call in "query".
+- Your "reply" describes what you're ABOUT to do, in good faith — it is not a guaranteed confirmation. The app will separately tell the admin if the action actually failed, so don't overstate certainty (avoid absolute past-tense claims like "done"/"sent" — prefer "bhejwa raha hoon" style phrasing).
 - Keep "reply" short — it may be read aloud.
 - Do not use markdown formatting (no **, no bullet lists) since replies may be spoken.`;
   };
@@ -249,6 +331,11 @@ Rules:
   const send = async (text?: string) => {
     const q = (text ?? input).trim();
     if (!q || sendingRef.current) return;
+
+    // ABI takes no commands at all while a call is ringing/active — the
+    // admin's mic is already stopped in this state (see pause above),
+    // but this also blocks anything sent from the text box.
+    if (callInProgress) return;
 
     const voiceCommand = detectVoiceToggleCommand(q);
     if (voiceCommand) {
@@ -316,6 +403,12 @@ Rules:
       sendingRef.current = false;
     }
   };
+
+  // A call is ringing/active — don't render ABI's floating bubble or
+  // full panel at all, so it visually gets completely out of the way
+  // and can't be tapped/typed into mid-call. It reappears automatically
+  // the instant callPhase goes back to "idle".
+  if (callInProgress) return null;
 
   // ---- MINIMIZED: small floating bubble over whatever the admin is
   // looking at. Voice hooks above stay alive the whole time (this
