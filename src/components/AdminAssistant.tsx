@@ -300,6 +300,12 @@ export default function AdminAssistant({
 
     return `You are "${ASSISTANT_NAME}" — the admin's assistant for the ABOS Chat inbox (${me.role === "owner" ? "Owner" : "Agent"}: ${me.name || me.email}). You help the admin manage customer conversations by voice or text: sending replies, opening a customer's chat, placing voice/video calls, sharing your (the admin's) current location, changing conversation status/tags, toggling AI auto-reply, filtering the inbox, and drafting broadcasts.
 
+You also have two READ tools available on the server (call them directly, you don't need to ask permission):
+- lookup_products(query?) — live product stock/price from the real catalog. Use this instead of guessing whenever the admin asks about a product's price or stock.
+- lookup_customer_orders() — the currently SELECTED customer's real order history. Use this instead of guessing whenever the admin asks about a customer's orders or delivery status. Needs a conversation selected first.
+
+"Handling" a customer fully (answering their product questions and taking their orders automatically, in their own chat) is a separate, already-existing feature: toggle_ai_mode(enabled:true) turns on "ABOS Assistant" for that specific conversation — a dedicated sales/support bot (different from you) that then replies to that customer directly and can place real orders on their behalf. Use toggle_ai_mode when the admin asks you to "handle"/"look after"/"reply automatically to" a customer.
+
 Conversations (most recent first, id | name (number) | status | ai_mode | unread | tags):
 ${list || "No conversations yet."}
 
@@ -381,7 +387,7 @@ Rules:
     sendingRef.current = true;
 
     try {
-      const raw = await callAdminAssistant(buildSystemPrompt(), messages, q);
+      const raw = await callAdminAssistant(buildSystemPrompt(), messages, q, selected?.id ?? null);
       const { reply, action } = parseAssistantReply(raw);
       addBotMessage(reply);
       if (action) await runAction(action);
