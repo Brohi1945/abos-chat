@@ -1,11 +1,4 @@
-
-// ============================================================
-//  src/lib/callApi.ts
-//  Complete Call API — Phase 1 to 7
-//  - Create/Claim/End calls
-//  - Rate limiting (Phase 4)
-//  - Call waiting (Phase 6)
-// ============================================================
+// src/lib/callApi.ts
 
 import { supabase } from "./supabaseClient";
 import { Profile, Call, CallKind, CallStatus } from "./types";
@@ -240,19 +233,19 @@ export function subscribeToIncomingCalls(
         const call = payload.new as Call;
         if (call.caller_id === me.id) return;
 
-        // ---- PHASE 6: Check for waiting calls ----
-        if (call.status === 'waiting') {
-          // Show "busy" notification
-          // We'll handle this in CallManager
-          onRinging(call);
-          return;
-        }
-
+        // ---- Filter FIRST, for every status (including 'waiting') ----
+        // Previously 'waiting' events skipped this check entirely, so a
+        // call-waiting notification for someone else's conversation could
+        // reach this subscriber too (and IncomingCallBanner rings for
+        // 'waiting' calls the same as 'ringing' ones).
         if (me.role === "customer") {
           if (call.conversation_id !== myConversationId) return;
         } else if (call.caller_role !== "customer") {
           return;
         }
+
+        // ---- PHASE 6: 'waiting' just means "already on a call" — the
+        // busy notification itself is handled in CallManager.
         onRinging(call);
       }
     )
@@ -311,4 +304,3 @@ export function openCallSignalChannel(
 
   return { send, unsubscribe };
 }
-
