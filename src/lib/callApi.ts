@@ -163,7 +163,7 @@ export async function endCall(
     ? Math.max(0, Math.round((endedAt.getTime() - startedAt.getTime()) / 1000))
     : null;
 
-  await supabase
+  const { data: endedRows, error: endErr } = await supabase
     .from("abos_chat_calls")
     .update({
       status,
@@ -171,7 +171,21 @@ export async function endCall(
       duration_seconds: durationSeconds,
     })
     .eq("id", call.id)
-    .in("status", ["ringing", "active", "waiting"]);
+    .in("status", ["ringing", "active", "waiting"])
+    .select("id");
+
+  if (endErr) {
+    // Previously unchecked — a failed write here (RLS, network blip,
+    // race) meant the row stayed "active" forever and the OTHER person's
+    // screen would never get the postgres_changes update: their call
+    // screen and timer would keep running with no way to know why.
+    console.error("endCall: failed to update call row", endErr);
+  } else if (!endedRows || endedRows.length === 0) {
+    // Row didn't match the filter (already ended by the other side, or
+    // doesn't exist) — not necessarily an error, but worth knowing about
+    // if hangups seem to "not go through" on one side.
+    console.warn("endCall: no row updated for call", call.id, "(already ended?)");
+  }
 
   // Clear user's on_call status
   await supabase
