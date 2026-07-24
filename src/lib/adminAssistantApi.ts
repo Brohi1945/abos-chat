@@ -21,7 +21,11 @@ export type AdminAssistantAction =
   | { type: "set_tags"; tags: string[] }
   | { type: "filter_status"; status: "all" | ConversationStatus }
   | { type: "select_conversation"; query: string }
-  | { type: "prepare_broadcast"; text: string; tag?: string };
+  | { type: "prepare_broadcast"; text: string; tag?: string }
+  // Places a real voice/video call the same way tapping the phone/video
+  // icon in ChatWindow's header would — "query" (name/number) is
+  // optional: omit it to call whoever's currently selected.
+  | { type: "start_call"; kind: "voice" | "video"; query?: string };
 
 export async function callAdminAssistant(
   systemPrompt: string,
