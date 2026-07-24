@@ -1,13 +1,4 @@
-
-// ============================================================
-//  src/components/CallManager.tsx
-//  Complete Call Manager — Phase 1 to 7
-//  - TURN + ICE Restart (Phase 1)
-//  - HD + Bitrate (Phase 2)
-//  - Wake Lock + Quality (Phase 3)
-//  - Rate Limit (Phase 4)
-//  - Call Waiting (Phase 6)
-// ============================================================
+// src/components/CallManager.tsx
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Profile, Call, CallKind } from "../lib/types";
@@ -67,12 +58,29 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const [cameraOff, setCameraOff] = useState(false);
   const [mediaError, setMediaError] = useState("");
   const [qualityReport, setQualityReport] = useState<CallQualityReport | null>(null);
+  const [responding, setResponding] = useState(false);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const signalRef = useRef<ReturnType<typeof openCallSignalChannel> | null>(null);
   const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const callRowUnsubRef = useRef<() => void>(() => {});
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
+
+  // ---- Debounce guards against double-tap races ----
+  // acceptIncoming/declineIncoming both start with an await (claimCall /
+  // endCall). React state (phase) doesn't update until that resolves, so
+  // a fast double-tap on Accept used to fire claimCall() twice: the 2nd
+  // call always loses (the row is no longer status='ringing'), returns
+  // won=false, and calls resetToIdle() — which tears down the peer
+  // connection and stops the media tracks the 1st tap had *just* set up.
+  // Killing an active/connecting RTCPeerConnection and its tracks mid
+  // setup is exactly the kind of abrupt teardown that produces a loud
+  // pop/screech through the speaker, on both ends, independent of how
+  // close the two phones physically are — which matches the "loud
+  // beep/siren on pickup, same near or far" symptom. respondingRef below
+  // makes the 2nd tap a no-op instead.
+  const respondingRef = useRef(false);
+  const startingCallRef = useRef(false);
 
   // ---- ICE restart refs ----
   const restartAttemptedRef = useRef(false);
@@ -189,6 +197,8 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setPhase("idle");
     setMuted(false);
     setCameraOff(false);
+    respondingRef.current = false;
+    setResponding(false);
   };
 
   // ---- Begin Active Call ----
@@ -344,21 +354,24 @@ export default function CallManager({ me, myConversationId, children }: CallMana
 
   // ---- Start Call ----
   const startCall = async (conversationId: string, kind: CallKind, label: string) => {
-    if (phase !== "idle") return;
+    if (phase !== "idle" || startingCallRef.current) return;
     if (!callingIsSupported()) {
       setMediaError("Is browser/device pe calling support nahi hai.");
       return;
     }
+    startingCallRef.current = true;
 
     try {
       const created = await createCall(conversationId, me, kind);
       if (!created) {
         setMediaError("Call create nahi ho saki — dobara try karo.");
+        startingCallRef.current = false;
         return;
       }
       setCall(created);
       setPeerLabel(label);
       setPhase("outgoing");
+      startingCallRef.current = false;
 
       callRowUnsubRef.current = subscribeToCallRow(created.id, async (updated) => {
         setCall(updated);
@@ -380,6 +393,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
         resetToIdle();
       }, RING_TIMEOUT_MS);
     } catch (err: any) {
+      startingCallRef.current = false;
       if (err.message?.includes('Too many calls')) {
         setMediaError('⏳ Bohat zyada calls — thodi der baad try karo.');
         setTimeout(() => setMediaError(""), 5000);
@@ -391,24 +405,38 @@ export default function CallManager({ me, myConversationId, children }: CallMana
 
   // ---- Accept incoming ----
   const acceptIncoming = async () => {
-    if (!call) return;
-    const won = await claimCall(call.id, me);
-    if (!won) {
-      resetToIdle();
-      return;
+    if (!call || respondingRef.current) return;
+    respondingRef.current = true;
+    setResponding(true);
+    try {
+      const won = await claimCall(call.id, me);
+      if (!won) {
+        resetToIdle(); // also clears respondingRef/setResponding
+        return;
+      }
+      const fresh: Call = { ...call, status: "active", answered_by: me.id, answered_at: new Date().toISOString() };
+      setCall(fresh);
+      await beginActiveCall(fresh, false); // beginActiveCall() flips phase to "active", which unmounts IncomingCallBanner
+    } finally {
+      respondingRef.current = false;
+      setResponding(false);
     }
-    const fresh: Call = { ...call, status: "active", answered_by: me.id, answered_at: new Date().toISOString() };
-    setCall(fresh);
-    await beginActiveCall(fresh, false);
   };
 
   // ---- Decline incoming ----
   const declineIncoming = async () => {
-    if (!call) return;
-    if (me.role === "customer") {
-      await endCall(call, "declined", me);
+    if (!call || respondingRef.current) return;
+    respondingRef.current = true;
+    setResponding(true);
+    try {
+      if (me.role === "customer") {
+        await endCall(call, "declined", me);
+      }
+      resetToIdle();
+    } finally {
+      respondingRef.current = false;
+      setResponding(false);
     }
-    resetToIdle();
   };
 
   // ---- Hangup ----
@@ -460,7 +488,13 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       )}
 
       {phase === "incoming" && call && (
-        <IncomingCallBanner call={call} peerLabel={peerLabel} onAccept={acceptIncoming} onDecline={declineIncoming} />
+        <IncomingCallBanner
+          call={call}
+          peerLabel={peerLabel}
+          onAccept={acceptIncoming}
+          onDecline={declineIncoming}
+          busy={responding}
+        />
       )}
 
       {(phase === "outgoing" || phase === "active") && call && (
@@ -481,4 +515,3 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     </CallContext.Provider>
   );
 }
-
