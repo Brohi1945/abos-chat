@@ -6,9 +6,12 @@ import {
   createCall,
   claimCall,
   endCall,
+  endCallBeacon,
   getProfileName,
   subscribeToIncomingCalls,
   subscribeToCallRow,
+  subscribeToRingAck,
+  sendRingAck,
   openCallSignalChannel,
   SignalMessage,
 } from "../lib/callApi";
@@ -47,6 +50,7 @@ interface CallManagerProps {
 }
 
 type Phase = "idle" | "outgoing" | "incoming" | "active";
+type RingStatus = "calling" | "ringing";
 
 export default function CallManager({ me, myConversationId, children }: CallManagerProps) {
   const [phase, setPhase] = useState<Phase>("idle");
@@ -59,26 +63,22 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const [mediaError, setMediaError] = useState("");
   const [qualityReport, setQualityReport] = useState<CallQualityReport | null>(null);
   const [responding, setResponding] = useState(false);
+  // ---- "Calling…" vs "Ringing…" (WhatsApp-style) ----
+  // Starts "calling" the instant we dial. Flips to "ringing" only once
+  // the other device's IncomingCallBanner has actually mounted and
+  // acked back (see sendRingAck in the incoming-call listener below).
+  // If the other side has no network / app closed, no ack ever arrives,
+  // so it correctly stays "calling" until the ring times out.
+  const [ringStatus, setRingStatus] = useState<RingStatus>("calling");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const signalRef = useRef<ReturnType<typeof openCallSignalChannel> | null>(null);
   const ringTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const callRowUnsubRef = useRef<() => void>(() => {});
+  const ringAckUnsubRef = useRef<() => void>(() => {});
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
 
   // ---- Debounce guards against double-tap races ----
-  // acceptIncoming/declineIncoming both start with an await (claimCall /
-  // endCall). React state (phase) doesn't update until that resolves, so
-  // a fast double-tap on Accept used to fire claimCall() twice: the 2nd
-  // call always loses (the row is no longer status='ringing'), returns
-  // won=false, and calls resetToIdle() — which tears down the peer
-  // connection and stops the media tracks the 1st tap had *just* set up.
-  // Killing an active/connecting RTCPeerConnection and its tracks mid
-  // setup is exactly the kind of abrupt teardown that produces a loud
-  // pop/screech through the speaker, on both ends, independent of how
-  // close the two phones physically are — which matches the "loud
-  // beep/siren on pickup, same near or far" symptom. respondingRef below
-  // makes the 2nd tap a no-op instead.
   const respondingRef = useRef(false);
   const startingCallRef = useRef(false);
 
@@ -88,11 +88,46 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const resetRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isNegotiatingRef = useRef(false);
 
+  // ---- Keep a live snapshot of call/phase for the unload handler ----
+  // beforeunload/pagehide fire outside React's render cycle, so they'd
+  // otherwise close over a stale first-render "idle"/null from the
+  // effect's dependency array. Refs always read the latest value.
+  const callRef = useRef<Call | null>(null);
+  const phaseRef = useRef<Phase>("idle");
+  useEffect(() => { callRef.current = call; }, [call]);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+
   // ---- Request notification permission ----
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
+  }, []);
+
+  // ---- Reliably end the call if the tab/app closes mid-call ----
+  // Without this, closing the tab (or the OS killing a backgrounded
+  // browser) leaves the DB row stuck at 'ringing'/'active' forever,
+  // which is what caused "Already on a call" to show up for every
+  // future call and "call pic nahi hota" (Accept silently rejected
+  // because the answerer already looked busy). A server-side trigger
+  // now also auto-reaps stale rows as a safety net, but this fires
+  // immediately instead of after the 45s/4h reap window, so the other
+  // person sees the call end right away.
+  useEffect(() => {
+    const handleUnload = () => {
+      const c = callRef.current;
+      const p = phaseRef.current;
+      if (!c) return;
+      if (p === "incoming") {
+        endCallBeacon(c.id, "missed");
+      } else if (p === "outgoing") {
+        endCallBeacon(c.id, "missed");
+      } else if (p === "active") {
+        endCallBeacon(c.id, "ended");
+      }
+    };
+    window.addEventListener("pagehide", handleUnload);
+    return () => window.removeEventListener("pagehide", handleUnload);
   }, []);
 
   function notifyIncoming(call: Call, label: string) {
@@ -140,6 +175,9 @@ export default function CallManager({ me, myConversationId, children }: CallMana
         return;
       }
 
+      // ---- Let the caller know it actually reached us (Ringing…) ----
+      sendRingAck(incoming.id);
+
       notifyIncoming(incoming, label);
     });
     return unsub;
@@ -171,6 +209,8 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
     callRowUnsubRef.current();
     callRowUnsubRef.current = () => {};
+    ringAckUnsubRef.current();
+    ringAckUnsubRef.current = () => {};
     pendingIceRef.current = [];
 
     if (restartTimeoutRef.current) {
@@ -197,6 +237,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setPhase("idle");
     setMuted(false);
     setCameraOff(false);
+    setRingStatus("calling");
     respondingRef.current = false;
     setResponding(false);
   };
@@ -206,11 +247,6 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setPhase("active");
 
     // ---- Reliable hangup detection ----
-    // The "hangup" broadcast signal below is best-effort (no ack, no
-    // retry) — if it's ever dropped, the other side would otherwise be
-    // stuck showing an "active" call forever. The DB row update inside
-    // endCall() always happens though, so watch the row itself as a
-    // guaranteed fallback, independent of the broadcast channel.
     callRowUnsubRef.current = subscribeToCallRow(activeCall.id, (updated) => {
       if (updated.status === "ended" || updated.status === "missed" || updated.status === "declined") {
         resetToIdle();
@@ -287,10 +323,6 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     });
     pcRef.current = pc;
 
-    // IMPORTANT: createPeerConnection() (webrtc.ts) already attached an
-    // onnegotiationneeded handler that triggers Phase 2 bitrate-setting
-    // and Phase 3 quality-monitoring. Chain it instead of overwriting it,
-    // or those two features silently never run.
     const prevNegotiationHandler = pc.onnegotiationneeded;
     pc.onnegotiationneeded = async (ev) => {
       if (prevNegotiationHandler) {
@@ -371,7 +403,13 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       setCall(created);
       setPeerLabel(label);
       setPhase("outgoing");
+      setRingStatus("calling");
       startingCallRef.current = false;
+
+      // ---- Flip "Calling…" -> "Ringing…" once the other device acks ----
+      ringAckUnsubRef.current = subscribeToRingAck(created.id, () => {
+        setRingStatus("ringing");
+      });
 
       callRowUnsubRef.current = subscribeToCallRow(created.id, async (updated) => {
         setCall(updated);
@@ -411,12 +449,12 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     try {
       const won = await claimCall(call.id, me);
       if (!won) {
-        resetToIdle(); // also clears respondingRef/setResponding
+        resetToIdle();
         return;
       }
       const fresh: Call = { ...call, status: "active", answered_by: me.id, answered_at: new Date().toISOString() };
       setCall(fresh);
-      await beginActiveCall(fresh, false); // beginActiveCall() flips phase to "active", which unmounts IncomingCallBanner
+      await beginActiveCall(fresh, false);
     } finally {
       respondingRef.current = false;
       setResponding(false);
@@ -501,6 +539,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
         <CallScreen
           call={call}
           phase={phase}
+          ringStatus={ringStatus}
           peerLabel={peerLabel}
           localStream={localStream}
           remoteStream={remoteStream}
