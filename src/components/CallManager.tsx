@@ -31,8 +31,17 @@ import {
 import IncomingCallBanner from "./IncomingCallBanner";
 import CallScreen from "./CallScreen";
 
+type Phase = "idle" | "outgoing" | "incoming" | "active";
+
 interface CallContextValue {
   startCall: (conversationId: string, kind: CallKind, peerLabel: string) => void;
+  // Exposed so other UI (like the ABI assistant) can react to a call
+  // being in progress — e.g. go completely silent (stop listening,
+  // stop speaking) the instant a call is ringing/active, and resume
+  // only once it's back to "idle". Previously this lived only inside
+  // CallManager's own state, so nothing else in the app could tell a
+  // call was happening at all.
+  phase: Phase;
 }
 const CallContext = createContext<CallContextValue | null>(null);
 export function useCall() {
@@ -49,7 +58,6 @@ interface CallManagerProps {
   children: React.ReactNode;
 }
 
-type Phase = "idle" | "outgoing" | "incoming" | "active";
 type RingStatus = "calling" | "ringing";
 
 export default function CallManager({ me, myConversationId, children }: CallManagerProps) {
@@ -523,7 +531,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   useEffect(() => () => cleanupMedia(), []);
 
   return (
-    <CallContext.Provider value={{ startCall }}>
+    <CallContext.Provider value={{ startCall, phase }}>
       {children}
 
       {mediaError && (
