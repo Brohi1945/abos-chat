@@ -272,14 +272,19 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
 
       onIceConnectionStateChange: (state) => {
-        if (phase !== "active") return;
+        // NOTE: `phase` here is a snapshot from the render that was active
+        // when beginActiveCall() was invoked — it never updates inside this
+        // closure, so it was permanently stuck on "outgoing"/"incoming" and
+        // this whole reconnect path was silently dead code. phaseRef always
+        // reads the live value, so use that instead.
+        if (phaseRef.current !== "active") return;
         if (state === "disconnected" || state === "failed") {
           if (restartAttemptedRef.current) return;
           restartAttemptedRef.current = true;
 
           if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
           restartTimeoutRef.current = setTimeout(() => {
-            if (phase !== "active") return;
+            if (phaseRef.current !== "active") return;
             if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
               restartAttemptedRef.current = false;
               return;
@@ -372,16 +377,18 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     });
     signalRef.current = signal;
 
-    if (isCaller) {
-      isNegotiatingRef.current = true;
-      try {
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        signal.send({ type: "offer", sdp: offer, from: me.id });
-      } finally {
-        isNegotiatingRef.current = false;
-      }
-    }
+    // NOTE: we used to also manually create+send an offer here for the
+    // caller, right after addTrack(). But addTrack() ALSO fires the
+    // browser's own "negotiationneeded" event (handled above), which does
+    // the exact same thing. That meant the caller sent TWO offers back to
+    // back on every call: the manual one immediately, then a second one a
+    // moment later from onnegotiationneeded (isNegotiatingRef had already
+    // been reset to false by the time it fired). The callee would apply
+    // the first offer, answer it, then get hit with an unexpected second
+    // offer/renegotiation — this is what caused calls to "connect" (status
+    // flips to active) but audio to never actually flow, or flow one-way.
+    // The onnegotiationneeded handler above is enough on its own — it's
+    // the standard, correct place for the caller to make the offer.
   };
 
   // ---- Start Call ----
@@ -480,8 +487,16 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   // ---- Hangup ----
   const hangup = async () => {
     if (!call) return;
+    const status = phase === "active" ? "ended" : "missed";
     if (phase === "active") signalRef.current?.send({ type: "hangup", from: me.id });
-    await endCall(call, phase === "active" ? "ended" : "missed", me);
+    // Fire an instant, best-effort DB flip in parallel with the full
+    // endCall() flow below. endCall() does several sequential writes
+    // (status -> profiles -> message log); this guarantees the status
+    // itself flips as fast as possible so the other side's
+    // subscribeToCallRow fires right away instead of waiting on the
+    // whole chain (or on a broadcast channel, if that's ever misconfigured).
+    endCallBeacon(call.id, status);
+    await endCall(call, status, me);
     resetToIdle();
   };
 
