@@ -26,13 +26,33 @@ export default async function handler(req, res) {
   }
 
   try {
+    // ---- Auth ----
+    // This endpoint had no auth check at all — any unauthenticated request
+    // on the internet could POST an arbitrary userId and force a push to
+    // them, or burn through the webpush send quota. Require a valid
+    // Supabase session. (Once this feature is actually wired up to a
+    // specific flow — e.g. "notify the other side of this conversation" —
+    // this can be tightened further to check the caller is a real
+    // participant in that conversation, the same way verifyCallerForConversation
+    // does for /api/groq-reply.)
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    if (!token) {
+      return res.status(401).json({ error: "Missing Authorization header" });
+    }
+
+    const supabase = supabaseServer();
+
+    const { data: userData, error: userErr } = await supabase.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Invalid or expired session" });
+    }
+
     const { userId, title, body, icon, data, conversationId } = req.body;
 
     if (!userId || !title || !body) {
       return res.status(400).json({ error: "Missing userId, title, or body" });
     }
-
-    const supabase = supabaseServer();
 
     // Get user's push subscriptions
     const { data: subscriptions, error } = await supabase
