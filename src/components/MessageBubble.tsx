@@ -211,7 +211,14 @@ export default function MessageBubble({ message, isMine, isRead }: MessageBubble
           <span>{time}</span>
           {isMine && (
             <div className="flex items-center gap-0.5">
-              {getDeliveryIcon(message.delivery_status || 'sent')}
+              {/* isRead comes from the conversation's live last-read timestamp
+                  (real-time, via subscribeToConversation) — it's the one
+                  signal that actually updates. delivery_status is only ever
+                  'sent' (set once at insert, never updated after), so it's
+                  used purely as a fallback for the 'failed' state. */}
+              {isRead
+                ? <CheckCheck size={13} className="text-accent" />
+                : getDeliveryIcon(message.delivery_status || 'sent')}
             </div>
           )}
         </div>
