@@ -1,5 +1,4 @@
 // src/components/CallManager.tsx
-// FIXED: signaling channel created BEFORE adding tracks, added debug logs
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { Profile, Call, CallKind } from "../lib/types";
@@ -64,6 +63,12 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const [mediaError, setMediaError] = useState("");
   const [qualityReport, setQualityReport] = useState<CallQualityReport | null>(null);
   const [responding, setResponding] = useState(false);
+  // ---- "Calling…" vs "Ringing…" (WhatsApp-style) ----
+  // Starts "calling" the instant we dial. Flips to "ringing" only once
+  // the other device's IncomingCallBanner has actually mounted and
+  // acked back (see sendRingAck in the incoming-call listener below).
+  // If the other side has no network / app closed, no ack ever arrives,
+  // so it correctly stays "calling" until the ring times out.
   const [ringStatus, setRingStatus] = useState<RingStatus>("calling");
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
@@ -73,20 +78,41 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   const ringAckUnsubRef = useRef<() => void>(() => {});
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
 
+  // ---- Debounce guards against double-tap races ----
   const respondingRef = useRef(false);
   const startingCallRef = useRef(false);
 
+  // ---- ICE restart refs ----
+  const restartAttemptedRef = useRef(false);
+  const restartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resetRestartTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isNegotiatingRef = useRef(false);
+
+  // ---- Keep a live snapshot of call/phase for the unload handler ----
+  // beforeunload/pagehide fire outside React's render cycle, so they'd
+  // otherwise close over a stale first-render "idle"/null from the
+  // effect's dependency array. Refs always read the latest value.
   const callRef = useRef<Call | null>(null);
   const phaseRef = useRef<Phase>("idle");
   useEffect(() => { callRef.current = call; }, [call]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
+  // ---- Request notification permission ----
   useEffect(() => {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission().catch(() => {});
     }
   }, []);
 
+  // ---- Reliably end the call if the tab/app closes mid-call ----
+  // Without this, closing the tab (or the OS killing a backgrounded
+  // browser) leaves the DB row stuck at 'ringing'/'active' forever,
+  // which is what caused "Already on a call" to show up for every
+  // future call and "call pic nahi hota" (Accept silently rejected
+  // because the answerer already looked busy). A server-side trigger
+  // now also auto-reaps stale rows as a safety net, but this fires
+  // immediately instead of after the 45s/4h reap window, so the other
+  // person sees the call end right away.
   useEffect(() => {
     const handleUnload = () => {
       const c = callRef.current;
@@ -122,6 +148,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
   }
 
+  // ---- Incoming call listener ----
   useEffect(() => {
     const unsub = subscribeToIncomingCalls(me, myConversationId, async (incoming) => {
       let alreadyBusy = false;
@@ -141,18 +168,22 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       }
       setPeerLabel(label);
 
+      // ---- Phase 6: Call waiting ----
       if (incoming.status === 'waiting') {
         setMediaError('📞 Already on a call — waiting for next call');
         setTimeout(() => setMediaError(""), 5000);
         return;
       }
 
+      // ---- Let the caller know it actually reached us (Ringing…) ----
       sendRingAck(incoming.id);
+
       notifyIncoming(incoming, label);
     });
     return unsub;
   }, [me.id, myConversationId]);
 
+  // ---- Auto-dismiss if claimed by someone else ----
   useEffect(() => {
     if (phase !== "incoming" || !call) return;
     const unsub = subscribeToCallRow(call.id, (updated) => {
@@ -163,6 +194,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     return unsub;
   }, [phase, call?.id]);
 
+  // ---- Cleanup ----
   const cleanupMedia = () => {
     stopStream(localStream);
     setLocalStream(null);
@@ -180,6 +212,18 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     ringAckUnsubRef.current();
     ringAckUnsubRef.current = () => {};
     pendingIceRef.current = [];
+
+    if (restartTimeoutRef.current) {
+      clearTimeout(restartTimeoutRef.current);
+      restartTimeoutRef.current = null;
+    }
+    if (resetRestartTimeoutRef.current) {
+      clearTimeout(resetRestartTimeoutRef.current);
+      resetRestartTimeoutRef.current = null;
+    }
+    restartAttemptedRef.current = false;
+    isNegotiatingRef.current = false;
+
     stopQualityMonitoring();
     setQualityReport(null);
   };
@@ -198,10 +242,11 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setResponding(false);
   };
 
+  // ---- Begin Active Call ----
   const beginActiveCall = async (activeCall: Call, isCaller: boolean) => {
-    console.log("[CallManager] beginActiveCall, isCaller:", isCaller);
     setPhase("active");
 
+    // ---- Reliable hangup detection ----
     callRowUnsubRef.current = subscribeToCallRow(activeCall.id, (updated) => {
       if (updated.status === "ended" || updated.status === "missed" || updated.status === "declined") {
         resetToIdle();
@@ -223,28 +268,56 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     setLocalStream(stream);
 
     const pc = await createPeerConnection({
-      onRemoteStream: (s) => {
-        console.log("[CallManager] Remote stream received, audio tracks:", s.getAudioTracks().length);
-        setRemoteStream(s);
-      },
-      onIceCandidate: (candidate) => {
-        console.log("[CallManager] Sending ICE candidate:", candidate);
-        signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id });
-      },
+      onRemoteStream: (s) => setRemoteStream(s),
+      onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
+
       onIceConnectionStateChange: (state) => {
-        console.log("[CallManager] ICE connection state:", state);
-        if (state === "connected" || state === "completed") {
-          console.log("[CallManager] ICE connected — media should flow");
+        // NOTE: `phase` here is a snapshot from the render that was active
+        // when beginActiveCall() was invoked — it never updates inside this
+        // closure, so it was permanently stuck on "outgoing"/"incoming" and
+        // this whole reconnect path was silently dead code. phaseRef always
+        // reads the live value, so use that instead.
+        if (phaseRef.current !== "active") return;
+        if (state === "disconnected" || state === "failed") {
+          if (restartAttemptedRef.current) return;
+          restartAttemptedRef.current = true;
+
+          if (restartTimeoutRef.current) clearTimeout(restartTimeoutRef.current);
+          restartTimeoutRef.current = setTimeout(() => {
+            if (phaseRef.current !== "active") return;
+            if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+              restartAttemptedRef.current = false;
+              return;
+            }
+            try {
+              pc.restartIce();
+            } catch (err) {
+              console.error("ICE restart failed:", err);
+            }
+
+            if (resetRestartTimeoutRef.current) clearTimeout(resetRestartTimeoutRef.current);
+            resetRestartTimeoutRef.current = setTimeout(() => {
+              restartAttemptedRef.current = false;
+            }, 10000);
+          }, 2500);
+        } else if (state === "connected" || state === "completed") {
+          restartAttemptedRef.current = false;
+          if (restartTimeoutRef.current) {
+            clearTimeout(restartTimeoutRef.current);
+            restartTimeoutRef.current = null;
+          }
         }
       },
+
       onPeerConnectionReady: (readyPc) => {
         setBitrateParameters(readyPc);
-        console.log("✅ Bitrate parameters set");
+        console.log("✅ Phase 2: Bitrate parameters set");
       },
-      onQualityReport: (report) => {
+
+      onQualityReport: (report: CallQualityReport) => {
         setQualityReport(report);
         if (report.quality === 'poor' || report.quality === 'very-poor') {
-          console.warn('⚠️ Poor call quality:', report);
+          console.warn('⚠️ Poor call quality detected:', report);
           const msg = report.quality === 'very-poor'
             ? '⚠️ Connection very weak — call may drop soon'
             : '⚠️ Connection weak — quality may be affected';
@@ -255,40 +328,6 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     });
     pcRef.current = pc;
 
-    // ---- Create signal channel BEFORE adding tracks ----
-    console.log("[CallManager] Creating signal channel");
-    const signal = openCallSignalChannel(activeCall.id, me.id, async (msg: SignalMessage) => {
-      console.log("[CallManager] Signal message received:", msg.type);
-      if (msg.type === "offer") {
-        await pc.setRemoteDescription(msg.sdp);
-        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
-        pendingIceRef.current = [];
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        signal.send({ type: "answer", sdp: answer, from: me.id });
-        console.log("[CallManager] Sent answer");
-      } else if (msg.type === "answer") {
-        await pc.setRemoteDescription(msg.sdp);
-        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
-        pendingIceRef.current = [];
-        console.log("[CallManager] Set remote description (answer)");
-      } else if (msg.type === "ice-candidate") {
-        if (pc.remoteDescription) {
-          await pc.addIceCandidate(msg.candidate);
-          console.log("[CallManager] Added ICE candidate");
-        } else {
-          pendingIceRef.current.push(msg.candidate);
-          console.log("[CallManager] Pending ICE candidate (remote desc not set)");
-        }
-      } else if (msg.type === "hangup") {
-        await endCall(activeCall, "ended", me);
-        resetToIdle();
-      }
-    });
-    signalRef.current = signal;
-    // ------------------------------------------------
-
-    // ---- Set up negotiation needed handler ----
     const prevNegotiationHandler = pc.onnegotiationneeded;
     pc.onnegotiationneeded = async (ev) => {
       if (prevNegotiationHandler) {
@@ -299,27 +338,64 @@ export default function CallManager({ me, myConversationId, children }: CallMana
         }
       }
 
+      if (isNegotiatingRef.current) return;
       if (!isCaller) return;
-      console.log("[CallManager] onnegotiationneeded fired, creating offer");
+
+      isNegotiatingRef.current = true;
       try {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
         signalRef.current?.send({ type: "offer", sdp: offer, from: me.id });
-        console.log("[CallManager] Sent offer");
       } catch (err) {
-        console.error("Failed to create/send offer:", err);
+        console.error("Negotiation needed failed:", err);
+      } finally {
+        isNegotiatingRef.current = false;
       }
     };
-    // ------------------------------------------------
 
-    // ---- Finally, add tracks ----
-    stream.getTracks().forEach((t) => {
-      pc.addTrack(t, stream);
-      console.log("[CallManager] Added track:", t.kind);
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+
+    const signal = openCallSignalChannel(activeCall.id, me.id, async (msg: SignalMessage) => {
+      if (msg.type === "offer") {
+        await pc.setRemoteDescription(msg.sdp);
+        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
+        pendingIceRef.current = [];
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        signal.send({ type: "answer", sdp: answer, from: me.id });
+      } else if (msg.type === "answer") {
+        await pc.setRemoteDescription(msg.sdp);
+        for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
+        pendingIceRef.current = [];
+      } else if (msg.type === "ice-candidate") {
+        if (pc.remoteDescription) await pc.addIceCandidate(msg.candidate);
+        else pendingIceRef.current.push(msg.candidate);
+      } else if (msg.type === "hangup") {
+        // The side that hung up already ran the full endCall() (DB status
+        // + profiles + call-log message). Doing it again here caused a
+        // duplicate call-log entry and delayed our own cleanup behind an
+        // extra DB round-trip. subscribeToCallRow (above) is still a
+        // fallback in case this broadcast never arrives.
+        resetToIdle();
+      }
     });
-    // If caller, the negotiationneeded will fire after this
+    signalRef.current = signal;
+
+    // NOTE: we used to also manually create+send an offer here for the
+    // caller, right after addTrack(). But addTrack() ALSO fires the
+    // browser's own "negotiationneeded" event (handled above), which does
+    // the exact same thing. That meant the caller sent TWO offers back to
+    // back on every call: the manual one immediately, then a second one a
+    // moment later from onnegotiationneeded (isNegotiatingRef had already
+    // been reset to false by the time it fired). The callee would apply
+    // the first offer, answer it, then get hit with an unexpected second
+    // offer/renegotiation — this is what caused calls to "connect" (status
+    // flips to active) but audio to never actually flow, or flow one-way.
+    // The onnegotiationneeded handler above is enough on its own — it's
+    // the standard, correct place for the caller to make the offer.
   };
 
+  // ---- Start Call ----
   const startCall = async (conversationId: string, kind: CallKind, label: string) => {
     if (phase !== "idle" || startingCallRef.current) return;
     if (!callingIsSupported()) {
@@ -341,6 +417,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       setRingStatus("calling");
       startingCallRef.current = false;
 
+      // ---- Flip "Calling…" -> "Ringing…" once the other device acks ----
       ringAckUnsubRef.current = subscribeToRingAck(created.id, () => {
         setRingStatus("ringing");
       });
@@ -375,6 +452,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
   };
 
+  // ---- Accept incoming ----
   const acceptIncoming = async () => {
     if (!call || respondingRef.current) return;
     respondingRef.current = true;
@@ -394,6 +472,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
   };
 
+  // ---- Decline incoming ----
   const declineIncoming = async () => {
     if (!call || respondingRef.current) return;
     respondingRef.current = true;
@@ -409,11 +488,18 @@ export default function CallManager({ me, myConversationId, children }: CallMana
     }
   };
 
+  // ---- Hangup ----
   const hangup = async () => {
     if (!call) return;
     const status = phase === "active" ? "ended" : "missed";
     if (phase === "active") signalRef.current?.send({ type: "hangup", from: me.id });
-    endCallBeacon(call.id, status);
+    // NOTE: endCallBeacon() is intentionally NOT called here. It's a
+    // fire-and-forget PATCH meant only for the pagehide/unload case (see
+    // that handler above) where a full async endCall() might not finish
+    // before the tab dies. Calling it here too raced with the full
+    // endCall() write below — if the beacon's minimal PATCH landed first,
+    // endCall()'s conditional UPDATE (.in("status", [...])) would no
+    // longer match the row, silently skipping duration_seconds.
     await endCall(call, status, me);
     resetToIdle();
   };
@@ -441,7 +527,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   useEffect(() => () => cleanupMedia(), []);
 
   return (
-    <CallContext.Provider value={{ startCall, phase }}>
+    <CallContext.Provider value={{ startCall }}>
       {children}
 
       {mediaError && (
