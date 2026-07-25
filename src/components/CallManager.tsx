@@ -266,12 +266,18 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       return;
     }
     setLocalStream(stream);
+    console.log("[DEBUG] Local stream captured. audio tracks:", stream.getAudioTracks().length, "video tracks:", stream.getVideoTracks().length);
 
     const pc = await createPeerConnection({
-      onRemoteStream: (s) => setRemoteStream(s),
+      onRemoteStream: (s) => {
+        console.log("[DEBUG] Remote stream received. audio tracks:", s.getAudioTracks().length, "video tracks:", s.getVideoTracks().length);
+        s.getAudioTracks().forEach((t) => console.log("[DEBUG] remote audio track — enabled:", t.enabled, "muted:", t.muted, "readyState:", t.readyState));
+        setRemoteStream(s);
+      },
       onIceCandidate: (candidate) => signalRef.current?.send({ type: "ice-candidate", candidate, from: me.id }),
 
       onIceConnectionStateChange: (state) => {
+        console.log("[DEBUG] ICE connection state:", state);
         // NOTE: `phase` here is a snapshot from the render that was active
         // when beginActiveCall() was invoked — it never updates inside this
         // closure, so it was permanently stuck on "outgoing"/"incoming" and
@@ -353,7 +359,10 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       }
     };
 
-    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    stream.getTracks().forEach((t) => {
+      pc.addTrack(t, stream);
+      console.log("[DEBUG] Added local track to pc:", t.kind, "enabled:", t.enabled);
+    });
 
     const signal = openCallSignalChannel(activeCall.id, me.id, async (msg: SignalMessage) => {
       if (msg.type === "offer") {
