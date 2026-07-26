@@ -1,9 +1,11 @@
 // ============================================================
 //  src/lib/chatApi.ts
-//  Complete Chat API — Phase 1 to 7
+//  Complete Chat API — Phase 1 to 8
 //  - Messages, conversations, broadcasts
 //  - Message queue (Phase 5)
-//  - Read receipts (Phase 5)
+//  - Read receipts (Phase 5), now with a real read_at timestamp (Phase 8)
+//  - Reply/quote, edit, soft-delete, pin, reactions, canned
+//    responses, in-chat search (Phase 8 — Quick Wins)
 // ============================================================
 
 import { supabase } from "./supabaseClient";
@@ -16,6 +18,8 @@ import {
   ProductSnapshot,
   LinkedOrder,
   ConversationStatus,
+  MessageReaction,
+  CannedResponse,
 } from "./types";
 
 // ============================================================
@@ -181,6 +185,19 @@ export interface MessagesPage {
   hasMore: boolean;
 }
 
+export async function getMessageById(messageId: string): Promise<ChatMessage | null> {
+  const { data, error } = await supabase
+    .from("abos_chat_messages")
+    .select("*")
+    .eq("id", messageId)
+    .maybeSingle();
+  if (error) {
+    console.error(error);
+    return null;
+  }
+  return data as ChatMessage | null;
+}
+
 export async function listMessages(
   conversationId: string,
   before?: string
@@ -222,6 +239,8 @@ interface SendMessageInput {
   productSnapshot?: ProductSnapshot;
   senderName?: string;
   senderTitle?: "Owner" | "Agent";
+  // Phase 8: reply/quote — id of the message being replied to
+  replyToId?: string;
 }
 
 // ---- PHASE 5: Message Queue ----
@@ -316,6 +335,7 @@ async function sendMessageDirect(input: SendMessageInput): Promise<boolean> {
     product_snapshot: input.productSnapshot ?? null,
     sender_name: input.senderName ?? null,
     sender_title: input.senderTitle ?? null,
+    reply_to_id: input.replyToId ?? null,
     delivery_status: 'sent',
   });
 
@@ -351,7 +371,7 @@ export async function sendMessage(input: SendMessageInput): Promise<boolean> {
 }
 
 // ============================================================
-//  Mark Messages Read (Phase 5)
+//  Mark Messages Read (Phase 5, real timestamp added in Phase 8)
 // ============================================================
 
 export async function markMessagesRead(conversationId: string, userId: string): Promise<void> {
@@ -363,6 +383,232 @@ export async function markMessagesRead(conversationId: string, userId: string): 
   } catch (err) {
     console.error('Error marking messages read:', err);
   }
+}
+
+// ============================================================
+//  Phase 8: Edit / Delete
+// ============================================================
+
+export async function editMessage(messageId: string, newBody: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("abos_chat_messages")
+    .update({ body: newBody, edited_at: new Date().toISOString() })
+    .eq("id", messageId);
+  if (error) {
+    console.error("Edit message error:", error);
+    return false;
+  }
+  return true;
+}
+
+export async function deleteMessage(messageId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("abos_chat_messages")
+    .update({
+      deleted_at: new Date().toISOString(),
+      body: null,
+      media_url: null,
+    })
+    .eq("id", messageId);
+  if (error) {
+    console.error("Delete message error:", error);
+    return false;
+  }
+  return true;
+}
+
+// ============================================================
+//  Phase 8: Pin / Unpin
+// ============================================================
+
+export async function pinMessage(messageId: string, userId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("abos_chat_messages")
+    .update({ pinned_at: new Date().toISOString(), pinned_by: userId })
+    .eq("id", messageId);
+  if (error) {
+    console.error("Pin message error:", error);
+    return false;
+  }
+  return true;
+}
+
+export async function unpinMessage(messageId: string): Promise<boolean> {
+  const { error } = await supabase
+    .from("abos_chat_messages")
+    .update({ pinned_at: null, pinned_by: null })
+    .eq("id", messageId);
+  if (error) {
+    console.error("Unpin message error:", error);
+    return false;
+  }
+  return true;
+}
+
+export async function getPinnedMessages(conversationId: string): Promise<ChatMessage[]> {
+  const { data, error } = await supabase
+    .from("abos_chat_messages")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .not("pinned_at", "is", null)
+    .order("pinned_at", { ascending: false });
+  if (error) {
+    console.error(error);
+    return [];
+  }
+  return (data || []) as ChatMessage[];
+}
+
+// ============================================================
+//  Phase 8: Reactions
+// ============================================================
+
+export async function getReactionsForMessages(messageIds: string[]): Promise<MessageReaction[]> {
+  if (messageIds.length === 0) return [];
+  const { data, error } = await supabase
+    .from("abos_chat_message_reactions")
+    .select("*")
+    .in("message_id", messageIds);
+  if (error) {
+    console.error(error);
+    return [];
+  }
+  return (data || []) as MessageReaction[];
+}
+
+// Tap the same emoji again to remove your reaction, tap a different
+// one to switch it — one reaction per person per message (matches the
+// unique(message_id, user_id) constraint in the DB).
+export async function toggleReaction(
+  messageId: string,
+  userId: string,
+  emoji: string,
+  existing?: MessageReaction
+): Promise<"added" | "removed" | "changed" | "error"> {
+  if (existing && existing.emoji === emoji) {
+    const { error } = await supabase
+      .from("abos_chat_message_reactions")
+      .delete()
+      .eq("id", existing.id);
+    if (error) {
+      console.error(error);
+      return "error";
+    }
+    return "removed";
+  }
+
+  if (existing) {
+    const { error } = await supabase
+      .from("abos_chat_message_reactions")
+      .update({ emoji })
+      .eq("id", existing.id);
+    if (error) {
+      console.error(error);
+      return "error";
+    }
+    return "changed";
+  }
+
+  const { error } = await supabase
+    .from("abos_chat_message_reactions")
+    .insert({ message_id: messageId, user_id: userId, emoji });
+  if (error) {
+    console.error(error);
+    return "error";
+  }
+  return "added";
+}
+
+export function subscribeToReactions(
+  onChange: (payload: {
+    eventType: "INSERT" | "UPDATE" | "DELETE";
+    reaction: MessageReaction | null;
+    oldReaction: MessageReaction | null;
+  }) => void
+) {
+  const channel = supabase
+    .channel("message-reactions")
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "abos_chat_message_reactions" },
+      (payload) => {
+        onChange({
+          eventType: payload.eventType as "INSERT" | "UPDATE" | "DELETE",
+          reaction: (payload.new as MessageReaction) || null,
+          oldReaction: (payload.old as MessageReaction) || null,
+        });
+      }
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+// ============================================================
+//  Phase 8: In-chat conversation search
+// ============================================================
+
+export async function searchMessagesInConversation(
+  conversationId: string,
+  term: string
+): Promise<ChatMessage[]> {
+  const trimmed = term.trim();
+  if (!trimmed) return [];
+  const { data, error } = await supabase
+    .from("abos_chat_messages")
+    .select("*")
+    .eq("conversation_id", conversationId)
+    .is("deleted_at", null)
+    .ilike("body", `%${trimmed}%`)
+    .order("created_at", { ascending: false })
+    .limit(50);
+  if (error) {
+    console.error(error);
+    return [];
+  }
+  return (data || []) as ChatMessage[];
+}
+
+// ============================================================
+//  Phase 8: Canned responses (shared, shop-wide, staff only)
+// ============================================================
+
+export async function listCannedResponses(): Promise<CannedResponse[]> {
+  const { data, error } = await supabase
+    .from("abos_chat_canned_responses")
+    .select("*")
+    .order("created_at", { ascending: true });
+  if (error) {
+    console.error(error);
+    return [];
+  }
+  return (data || []) as CannedResponse[];
+}
+
+export async function createCannedResponse(
+  userId: string,
+  title: string,
+  body: string
+): Promise<boolean> {
+  const { error } = await supabase
+    .from("abos_chat_canned_responses")
+    .insert({ created_by: userId, title, body });
+  if (error) {
+    console.error(error);
+    return false;
+  }
+  return true;
+}
+
+export async function deleteCannedResponse(id: string): Promise<boolean> {
+  const { error } = await supabase.from("abos_chat_canned_responses").delete().eq("id", id);
+  if (error) {
+    console.error(error);
+    return false;
+  }
+  return true;
 }
 
 // ============================================================
@@ -450,6 +696,33 @@ export function subscribeToMessages(
         filter: `conversation_id=eq.${conversationId}`,
       },
       (payload) => onInsert(payload.new as ChatMessage)
+    )
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
+// Phase 8: live updates for edits/deletes/pins on already-loaded
+// messages (separate from subscribeToMessages, which only fires on
+// INSERT — this covers UPDATE so an edit/delete/pin from one device
+// shows up instantly on the other side without a refresh).
+export function subscribeToMessageUpdates(
+  conversationId: string,
+  onUpdate: (msg: ChatMessage) => void
+) {
+  const channel = supabase
+    .channel(`messages-updates-${conversationId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "UPDATE",
+        schema: "public",
+        table: "abos_chat_messages",
+        filter: `conversation_id=eq.${conversationId}`,
+      },
+      (payload) => onUpdate(payload.new as ChatMessage)
     )
     .subscribe();
 
