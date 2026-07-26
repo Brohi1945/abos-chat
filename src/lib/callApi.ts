@@ -401,10 +401,42 @@ export function openCallSignalChannel(
     onMessage(msg);
   });
 
-  channel.subscribe();
+  // ---- Never send before the channel has actually joined ----
+  // send() on a channel that hasn't reached "SUBSCRIBED" yet silently
+  // falls back to a one-off REST broadcast call ("Realtime send() is
+  // automatically falling back to REST API..." in devtools — this is
+  // the exact warning that showed up right when audio was missing).
+  // That fallback fires into the void if the OTHER side's channel
+  // hasn't finished joining yet either: broadcast has no history/replay
+  // for a listener that subscribes a moment later. The WebRTC offer is
+  // exactly this kind of one-shot, time-critical message — addTrack()
+  // fires onnegotiationneeded (which creates + sends the offer) almost
+  // immediately, often before this channel's join round-trip (extra
+  // step for a `private: true` channel) has completed. Lose the offer
+  // once and the call "connects" (DB status flips to active, timer
+  // runs) but no media ever negotiates — exactly the reported symptom.
+  // Fix: queue anything sent before SUBSCRIBED, flush in order the
+  // instant we actually join.
+  let ready = false;
+  const queue: SignalMessage[] = [];
 
-  const send = (msg: SignalMessage) =>
-    channel.send({ type: "broadcast", event: "signal", payload: msg });
+  channel.subscribe((status) => {
+    if (status === "SUBSCRIBED") {
+      ready = true;
+      while (queue.length) {
+        const msg = queue.shift()!;
+        channel.send({ type: "broadcast", event: "signal", payload: msg });
+      }
+    }
+  });
+
+  const send = (msg: SignalMessage) => {
+    if (ready) {
+      channel.send({ type: "broadcast", event: "signal", payload: msg });
+    } else {
+      queue.push(msg);
+    }
+  };
   const unsubscribe = () => supabase.removeChannel(channel);
 
   return { send, unsubscribe };
