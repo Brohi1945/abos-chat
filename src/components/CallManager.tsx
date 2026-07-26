@@ -21,6 +21,7 @@ import {
   stopStream,
   callingIsSupported,
   setBitrateParameters,
+  tuneOpusAudio,
   requestWakeLock,
   releaseWakeLock,
   setupWakeLockAutoRenew,
@@ -350,6 +351,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
       isNegotiatingRef.current = true;
       try {
         const offer = await pc.createOffer();
+        offer.sdp = tuneOpusAudio(offer.sdp || "");
         await pc.setLocalDescription(offer);
         signalRef.current?.send({ type: "offer", sdp: offer, from: me.id });
       } catch (err) {
@@ -370,6 +372,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
         for (const c of pendingIceRef.current) await pc.addIceCandidate(c);
         pendingIceRef.current = [];
         const answer = await pc.createAnswer();
+        answer.sdp = tuneOpusAudio(answer.sdp || "");
         await pc.setLocalDescription(answer);
         signal.send({ type: "answer", sdp: answer, from: me.id });
       } else if (msg.type === "answer") {
