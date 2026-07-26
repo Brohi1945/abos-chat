@@ -134,6 +134,8 @@ export async function getLocalStream(kind: CallKind): Promise<MediaStream> {
     echoCancellation: true,
     noiseSuppression: true,
     autoGainControl: true,
+    sampleRate: { ideal: 48000 },
+    channelCount: { ideal: 1 },
   };
 
   let videoConstraints: MediaTrackConstraints | boolean = false;
@@ -166,15 +168,22 @@ export function setBitrateParameters(pc: RTCPeerConnection): void {
       if (!track) continue;
 
       const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
 
+      // NOTE: minBitrate was never a real field on RTCRtpEncodingParameters
+      // (spec only defines maxBitrate) — setting it did nothing useful and
+      // risked the browser rejecting the whole setParameters() call on
+      // stricter engines, silently leaving EVERYTHING here unapplied.
       if (track.kind === "video") {
-        if (!params.encodings) params.encodings = [{}];
         params.encodings[0].maxBitrate = 2_500_000;
-        params.encodings[0].minBitrate = 1_500_000;
       } else if (track.kind === "audio") {
-        if (!params.encodings) params.encodings = [{}];
-        params.encodings[0].maxBitrate = 64_000;
-        params.encodings[0].minBitrate = 32_000;
+        // Ceiling only — tuneOpusAudio() (webrtc.ts, applied to the SDP
+        // before setLocalDescription) is what actually drives Opus's real
+        // target bitrate via maxaveragebitrate. This cap just needs to sit
+        // comfortably above that so it's never the limiting factor.
+        params.encodings[0].maxBitrate = 128_000;
       }
 
       sender.setParameters(params).catch((err) => {
@@ -184,6 +193,54 @@ export function setBitrateParameters(pc: RTCPeerConnection): void {
   } catch (err) {
     console.warn("Error setting bitrate parameters:", err);
   }
+}
+
+// ============================================================
+//  PHASE 9: HD Voice — Opus SDP tuning
+// ============================================================
+// Fixes "sounds like a bad radio station" audio: that's the classic
+// symptom of Opus running with DTX (Discontinuous Transmission — it stops
+// sending real audio during quiet gaps and lets the other side's decoder
+// guess/generate comfort noise instead, which sounds crackly/robotic when
+// the network is anything less than perfect) and no FEC (so any lost
+// packet is just gone — audible as a sharp click/static burst instead of
+// being smoothly reconstructed from redundancy in the next packet).
+// Neither of these is controllable via RTCRtpSender.setParameters() — for
+// Opus they're negotiated in the SDP's a=fmtp line, so we edit the offer/
+// answer SDP directly, right before setLocalDescription().
+export function tuneOpusAudio(sdp: string): string {
+  const rtpmapMatch = sdp.match(/a=rtpmap:(\d+) opus\/48000(?:\/\d+)?/i);
+  if (!rtpmapMatch) return sdp; // no Opus in this SDP — leave untouched
+
+  const payloadType = rtpmapMatch[1];
+  const desired: Record<string, string> = {
+    useinbandfec: "1", // forward error correction — smooths over lost packets instead of audible gaps/clicks
+    usedtx: "0", // always send real audio; no synthetic comfort-noise fill during pauses
+    stereo: "0", // voice call — mono is enough and leaves more bit budget for the actual signal
+    maxaveragebitrate: "32000", // ~32kbps mono fullband Opus is solidly "HD Voice" territory
+  };
+
+  const fmtpRegex = new RegExp(`a=fmtp:${payloadType} ([^\r\n]*)`, "i");
+  const fmtpMatch = sdp.match(fmtpRegex);
+
+  if (fmtpMatch) {
+    const params = new Map<string, string>();
+    fmtpMatch[1].split(";").forEach((pair) => {
+      const [k, v] = pair.split("=");
+      if (k) params.set(k.trim(), (v ?? "").trim());
+    });
+    Object.entries(desired).forEach(([k, v]) => params.set(k, v));
+    const rebuilt = Array.from(params.entries())
+      .map(([k, v]) => (v ? `${k}=${v}` : k))
+      .join(";");
+    return sdp.replace(fmtpMatch[0], `a=fmtp:${payloadType} ${rebuilt}`);
+  }
+
+  // No existing fmtp line for this payload type — add one right after rtpmap.
+  const newFmtpLine = `a=fmtp:${payloadType} ${Object.entries(desired)
+    .map(([k, v]) => `${k}=${v}`)
+    .join(";")}`;
+  return sdp.replace(rtpmapMatch[0], `${rtpmapMatch[0]}\r\n${newFmtpLine}`);
 }
 
 // ============================================================
