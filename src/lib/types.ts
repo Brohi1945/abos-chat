@@ -1,6 +1,8 @@
 // ============================================================
 //  src/lib/types.ts
-//  Complete Types — Phase 1 to 7
+//  Complete Types — Phase 1 to 8
+//  Phase 8 additions: reply/quote, edit, soft-delete, pin,
+//  reactions, canned responses, real read_at timestamp.
 // ============================================================
 
 export type Role = "customer" | "owner" | "agent";
@@ -123,6 +125,30 @@ export interface ChatMessage {
   // Phase 5: Read receipt
   read_at: string | null;
   delivery_status: "sent" | "delivered" | "read" | "failed";
+  // Phase 8: Quick wins
+  reply_to_id: string | null;
+  edited_at: string | null;
+  deleted_at: string | null;
+  pinned_at: string | null;
+  pinned_by: string | null;
+}
+
+// Phase 8: one reaction per person per message
+export interface MessageReaction {
+  id: string;
+  message_id: string;
+  user_id: string;
+  emoji: string;
+  created_at: string;
+}
+
+// Phase 8: shared shop-wide quick replies for staff
+export interface CannedResponse {
+  id: string;
+  created_by: string | null;
+  title: string;
+  body: string;
+  created_at: string;
 }
 
 export interface LinkedOrder {
