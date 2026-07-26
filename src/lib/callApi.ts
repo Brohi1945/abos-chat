@@ -131,13 +131,12 @@ export async function claimCall(callId: string, me: Profile): Promise<boolean> {
     return false;
   }
 
-  // Update user's on_call status
-  if (data && data.length > 0) {
-    await supabase
-      .from('abos_chat_profiles')
-      .update({ on_call: true, current_call_id: callId })
-      .eq('id', me.id);
-  }
+  // NOTE: on_call / current_call_id are set automatically by the
+  // abos_chat_calls_sync_profile_status server trigger the instant this
+  // row's status flips to 'active' above. The client no longer has
+  // UPDATE grant on these two columns (phase8 hardening) and doesn't
+  // need it — writing them here always failed with 403 and did nothing
+  // useful (the trigger had already set them in the same statement).
 
   return (data || []).length > 0;
 }
@@ -187,18 +186,11 @@ export async function endCall(
     console.warn("endCall: no row updated for call", call.id, "(already ended?)");
   }
 
-  // Clear user's on_call status
-  await supabase
-    .from('abos_chat_profiles')
-    .update({ on_call: false, current_call_id: null })
-    .eq('id', me.id);
-
-  if (call.answered_by) {
-    await supabase
-      .from('abos_chat_profiles')
-      .update({ on_call: false, current_call_id: null })
-      .eq('id', call.answered_by);
-  }
+  // NOTE: on_call / current_call_id are cleared automatically for both
+  // the caller and answered_by by the abos_chat_calls_sync_profile_status
+  // server trigger the instant status above lands as ended/missed/declined.
+  // The client has no UPDATE grant on these columns (phase8 hardening) —
+  // the old direct writes here always failed with 403 and were a no-op.
 
   const kindLabel = call.kind === "video" ? "Video" : "Voice";
   const label =
@@ -210,10 +202,18 @@ export async function endCall(
       ? `${kindLabel} call · ${formatDuration(durationSeconds)}`
       : `${kindLabel} call`;
 
+  // sender_id MUST be whoever is actually running endCall() right now
+  // (me.id), not call.caller_id. RLS's insert check requires
+  // sender_id = auth.uid() — when the person ANSWERING a call is the one
+  // who hangs up (rather than the original caller), stamping caller_id
+  // here made sender_id != auth.uid() and this insert silently failed
+  // with 403 every time. That's why call-log entries (and the duration/
+  // "Missed call" lines derived from them) went missing seemingly at
+  // random — it only happened on callee-initiated hangups.
   await supabase.from("abos_chat_messages").insert({
     conversation_id: call.conversation_id,
-    sender_id: call.caller_id,
-    sender_role: call.caller_role,
+    sender_id: me.id,
+    sender_role: me.role,
     kind: "call",
     body: label,
     call_id: call.id,
@@ -326,8 +326,16 @@ export function subscribeToIncomingCalls(
 // ============================================================
 
 export function subscribeToCallRow(callId: string, onUpdate: (call: Call) => void) {
+  // Unique per subscribe() call (not just per callId) — CallManager
+  // subscribes to the same call row more than once across the ringing ->
+  // active transition, and re-using one fixed topic name meant the second
+  // subscribe() could land on a channel the first hadn't finished tearing
+  // down yet, throwing "cannot add postgres_changes callbacks ... after
+  // subscribe()" (uncaught, since it happens inside supabase-js's own
+  // async join logic).
+  const topic = `call-row-${callId}-${Math.random().toString(36).slice(2)}`;
   const channel = supabase
-    .channel(`call-row-${callId}`)
+    .channel(topic)
     .on(
       "postgres_changes",
       { event: "UPDATE", schema: "public", table: "abos_chat_calls", filter: `id=eq.${callId}` },
