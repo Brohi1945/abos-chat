@@ -44,6 +44,17 @@ Standalone messaging app for ABOS customers — separate repo, **same Supabase p
 - **Voice/theme commands handled locally** — phrases like "dark mode laga do" or "voice band karo" are matched client-side (`voiceCommands.ts`) instead of round-tripping to the LLM, so they're instant and don't cost an API call.
 - New endpoint `/api/admin-chat` — owner **or agent**-authenticated (`verifyStaff` in `verifyOwner.js`), calls Groq (reuses the existing `GROQ_API_KEY`, no new secret needed).
 
+**Phase 8 — Quick Wins (reply, edit, delete, pin, reactions, canned responses, search)**
+- **Reply / quote** — tap a message's action row to quote it in your reply; tapping the quoted preview jumps straight to the original message (loading it in if it's outside the currently-loaded page).
+- **Message edit** — the sender can edit their own text messages; edited messages show an "edited" tag next to the timestamp.
+- **Message delete** — the sender can soft-delete their own message (any kind); it's replaced with a "This message was deleted" placeholder for everyone, body/media cleared server-side.
+- **Pinned messages** — either side (customer or staff) can pin/unpin any message in the conversation; a bar under the header shows the latest pinned message and jumps to it on tap.
+- **Reactions** — 👍❤️😂😮😢🙏, one per person per message (tap again to remove, tap a different one to switch), shown as grouped pill counts under the bubble, live via Realtime.
+- **"Seen at HH:MM"** — a real `read_at` timestamp (not just the delivery-status flag) is now recorded, shown under your most recent read message.
+- **Canned responses / quick replies** — a shared, shop-wide list of pre-saved replies staff can manage and insert into the compose box with one tap (⚡ button next to the product picker).
+- **In-chat search** — search box (🔍 in the header) searches this conversation's message bodies and jumps to any result.
+- All of the above is enforced server-side: a `BEFORE UPDATE` trigger (`abos_chat_messages_guard_update`) plus column-level grants make sure a customer can never edit/delete a staff member's message even though pinning is shared, and that `delivery_status`/`sender_id`/`is_ai` etc. can never be touched from the client at all.
+
 ## Setup
 
 ### 1. Run the SQL migrations, in this exact order
@@ -58,8 +69,9 @@ Open your ABOS Supabase project → **SQL Editor** → paste each file's content
 6. `1 supabase/migration_phase2_3_foundation.sql` — unread counts RPC, product snapshot column
 7. `supabase/migration_phase4_team_scale.sql` — agent role, status/tags, broadcasts, search
 8. `supabase/migration_phase5_calling.sql` — calls table, realtime publication, call log message kind
+9. `supabase/migration_phase8_quickwins.sql` — reply/quote, edit, soft-delete, pin, reactions table, canned responses table, real `read_at` timestamp, and the `abos_chat_messages_guard_update` trigger that keeps edit/delete/pin permissions correctly separated
 
-All files are idempotent — safe to re-run if you're not sure what's already applied. Phase 6 (theming + admin assistant) is frontend/API-only — no new migration needed.
+All files are idempotent — safe to re-run if you're not sure what's already applied. Phase 6 (theming + admin assistant) is frontend/API-only — no new migration needed. **Migration 9 has already been applied directly to the live Supabase project via the Supabase MCP tool during this session** — running it again from the repo file is safe and just confirms it's in sync.
 
 ### 2. Environment variables
 
@@ -186,7 +198,6 @@ Found via live testing + inspecting `net._http_response` logs in Supabase and Ve
 - **Voice/video calling has no TURN server** — STUN-only, so calls between two networks with strict/symmetric NAT (some corporate wifi, carrier-grade NAT) can fail to connect. Adding a TURN server (Twilio NTS, metered.ca, or self-hosted coturn) fixes this if it turns out to matter.
 - **No call waiting** — if you're already on a call, another incoming call is silently ignored rather than queued.
 - **No push notifications for calls** — like messages, the tab needs to be open to hear a ringing call.
-- **No message edit/delete** — planned for a later phase.
 - **No document attachments** (PDF etc.) — only images/voice currently. Planned for a later phase.
 - **No chat transcript export** — planned for a later phase.
 - **Agents have the same full access as owner** — no per-agent permission levels (e.g. can't restrict an agent to only certain conversations) yet. This also applies to the admin AI assistant — any agent can use it to act on any conversation.
@@ -203,7 +214,6 @@ Found via live testing + inspecting `net._http_response` logs in Supabase and Ve
 ## Roadmap
 
 **Later**
-- Message edit/delete
 - Document attachments (not just images/voice)
 - Chat transcript export
 - TURN server for reliable calling across all networks
