@@ -71,6 +71,106 @@ export default function AdminAssistant({
   const { startCall, phase: callPhase } = useCall();
   const callInProgress = callPhase !== "idle";
 
+  // ---- Draggable + closeable floating bubble (minimized mode) ----
+  // Position is stored as fixed-position {x,y} once the admin drags it;
+  // before that it uses the default bottom-right CSS corner. Persisted
+  // in localStorage so it stays put across reloads.
+  const bubbleRef = useRef<HTMLDivElement>(null);
+  const dragState = useRef<{ startX: number; startY: number; origX: number; origY: number; moved: boolean } | null>(
+    null
+  );
+  const [bubblePos, setBubblePos] = useState<{ x: number; y: number } | null>(() => {
+    try {
+      const saved = localStorage.getItem("abos_chat_abi_pos");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [bubbleClosed, setBubbleClosed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("abos_chat_abi_closed") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const clampNum = (val: number, min: number, max: number) => Math.min(Math.max(val, min), Math.max(min, max));
+
+  const handleBubblePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const el = bubbleRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    dragState.current = { startX: e.clientX, startY: e.clientY, origX: rect.left, origY: rect.top, moved: false };
+    el.setPointerCapture(e.pointerId);
+  };
+
+  const handleBubblePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const ds = dragState.current;
+    const el = bubbleRef.current;
+    if (!ds || !el) return;
+    const dx = e.clientX - ds.startX;
+    const dy = e.clientY - ds.startY;
+    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) ds.moved = true;
+    if (!ds.moved) return;
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    const nextX = clampNum(ds.origX + dx, 4, window.innerWidth - w - 4);
+    const nextY = clampNum(ds.origY + dy, 4, window.innerHeight - h - 4);
+    setBubblePos({ x: nextX, y: nextY });
+  };
+
+  const handleBubblePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const ds = dragState.current;
+    const el = bubbleRef.current;
+    if (el) {
+      try {
+        el.releasePointerCapture(e.pointerId);
+      } catch {
+        // ignore
+      }
+      if (ds?.moved) {
+        const rect = el.getBoundingClientRect();
+        const finalPos = { x: rect.left, y: rect.top };
+        try {
+          localStorage.setItem("abos_chat_abi_pos", JSON.stringify(finalPos));
+        } catch {
+          // ignore
+        }
+      }
+    }
+  };
+
+  // A real drag just happened — swallow the click that would otherwise
+  // fire on the mic/expand buttons right after releasing, so dragging
+  // never accidentally opens the full panel or toggles the mic.
+  const handleBubbleClickCapture = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (dragState.current?.moved) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragState.current.moved = false;
+    }
+  };
+
+  const handleBubbleClose = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setBubbleClosed(true);
+    try {
+      localStorage.setItem("abos_chat_abi_closed", "1");
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleBubbleReopen = () => {
+    setBubbleClosed(false);
+    try {
+      localStorage.setItem("abos_chat_abi_closed", "0");
+    } catch {
+      // ignore
+    }
+  };
+
   const THEME_LABELS: Record<string, string> = {
     light: "Light",
     dark: "Dark",
@@ -419,10 +519,41 @@ Rules:
   // ---- MINIMIZED: small floating bubble over whatever the admin is
   // looking at. Voice hooks above stay alive the whole time (this
   // component never unmounts just because the admin switches
-  // conversations), so a reply mid-sentence keeps speaking through it. ----
+  // conversations), so a reply mid-sentence keeps speaking through it.
+  // Draggable anywhere on screen (mouse or finger) and closeable — when
+  // closed, a small round tab stays docked so it can be reopened. ----
   if (mode === "minimized") {
+    if (bubbleClosed) {
+      const reopenStyle: React.CSSProperties = bubblePos
+        ? { left: bubblePos.x, top: bubblePos.y }
+        : { bottom: 96, right: 20 };
+      return (
+        <button
+          type="button"
+          onClick={handleBubbleReopen}
+          title={`${ASSISTANT_NAME} ko wapis kholain`}
+          className="fixed z-[60] w-10 h-10 rounded-full bg-brand text-white shadow-lg flex items-center justify-center opacity-70 hover:opacity-100 transition"
+          style={reopenStyle}
+        >
+          <Bot size={16} />
+        </button>
+      );
+    }
+
+    const bubbleStyle: React.CSSProperties = bubblePos
+      ? { left: bubblePos.x, top: bubblePos.y, touchAction: "none" }
+      : { bottom: 96, right: 20, touchAction: "none" };
+
     return (
-      <div className="fixed bottom-24 right-5 z-[60] flex items-center gap-2">
+      <div
+        ref={bubbleRef}
+        onPointerDown={handleBubblePointerDown}
+        onPointerMove={handleBubblePointerMove}
+        onPointerUp={handleBubblePointerUp}
+        onClickCapture={handleBubbleClickCapture}
+        className="fixed z-[60] flex items-center gap-2 cursor-grab active:cursor-grabbing"
+        style={bubbleStyle}
+      >
         {voiceSupported && (
           <button
             type="button"
@@ -435,22 +566,32 @@ Rules:
             {isListening ? <MicOff size={16} /> : <Mic size={16} />}
           </button>
         )}
-        <button
-          type="button"
-          onClick={() => onExpand()}
-          title={`${ASSISTANT_NAME} — tap to open`}
-          className="flex items-center gap-2 pl-3 pr-4 py-2.5 rounded-full bg-brand text-white shadow-lg hover:opacity-90 transition"
-        >
-          <span className="relative flex items-center justify-center w-6 h-6 rounded-full bg-white/20 shrink-0">
-            <Bot size={14} />
-            {(isListening || isSpeaking) && (
-              <span className="absolute inset-0 rounded-full bg-white/40 animate-ping" />
-            )}
-          </span>
-          <span className="text-xs font-medium">
-            {isListening ? "Sun raha hoon…" : isSpeaking ? "Bol raha hoon…" : ASSISTANT_NAME}
-          </span>
-        </button>
+        <div className="relative">
+          <button
+            type="button"
+            onClick={() => onExpand()}
+            title={`${ASSISTANT_NAME} — tap to open, hold and drag to move`}
+            className="flex items-center gap-2 pl-3 pr-4 py-2.5 rounded-full bg-brand text-white shadow-lg hover:opacity-90 transition"
+          >
+            <span className="relative flex items-center justify-center w-6 h-6 rounded-full bg-white/20 shrink-0">
+              <Bot size={14} />
+              {(isListening || isSpeaking) && (
+                <span className="absolute inset-0 rounded-full bg-white/40 animate-ping" />
+              )}
+            </span>
+            <span className="text-xs font-medium">
+              {isListening ? "Sun raha hoon…" : isSpeaking ? "Bol raha hoon…" : ASSISTANT_NAME}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={handleBubbleClose}
+            title="ABI ko band karo"
+            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-fg/70 text-white text-[10px] leading-none flex items-center justify-center shadow hover:bg-fg"
+          >
+            ×
+          </button>
+        </div>
       </div>
     );
   }
