@@ -635,7 +635,7 @@ export default function ChatWindow({
       )}
 
       {showSearch && (
-        <div className="absolute inset-0 z-10 bg-app/95 flex flex-col">
+        <div className="absolute inset-0 z-20 flex flex-col" style={{ backgroundColor: "var(--color-bg)" }}>
           <div className="px-4 py-3 border-b flex items-center gap-2">
             <Search size={15} className="text-muted shrink-0" />
             <input
@@ -701,7 +701,10 @@ export default function ChatWindow({
         </div>
         <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0">
           <button
-            onClick={() => setShowSearch(true)}
+            onClick={() => {
+              setShowCannedResponses(false);
+              setShowSearch(true);
+            }}
             className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
             aria-label="Search in conversation"
             title="Is conversation mein search karo"
@@ -868,7 +871,11 @@ export default function ChatWindow({
           </button>
           {me.role !== "customer" && (
             <button
-              onClick={() => setShowProductPicker(true)}
+              onClick={() => {
+                setShowCannedResponses(false);
+                setShowSearch(false);
+                setShowProductPicker(true);
+              }}
               className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
               title="Send product"
             >
@@ -877,7 +884,11 @@ export default function ChatWindow({
           )}
           {me.role !== "customer" && (
             <button
-              onClick={() => setShowCannedResponses(true)}
+              onClick={() => {
+                setShowProductPicker(false);
+                setShowSearch(false);
+                setShowCannedResponses(true);
+              }}
               className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
               title="Quick replies"
             >
