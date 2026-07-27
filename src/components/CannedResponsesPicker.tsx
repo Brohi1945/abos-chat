@@ -59,7 +59,7 @@ export default function CannedResponsesPicker({ myUserId, onPick, onClose }: Can
   };
 
   return (
-    <div className="absolute inset-0 z-10 bg-app/95 flex flex-col">
+    <div className="absolute inset-0 z-20 flex flex-col" style={{ backgroundColor: "var(--color-bg)" }}>
       <div className="px-4 py-3 border-b flex items-center gap-2">
         <Zap size={15} className="text-brand shrink-0" />
         <span className="flex-1 text-sm font-semibold text-fg">Quick replies</span>
