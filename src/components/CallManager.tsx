@@ -34,6 +34,14 @@ import CallScreen from "./CallScreen";
 
 interface CallContextValue {
   startCall: (conversationId: string, kind: CallKind, peerLabel: string) => void;
+  // Exposed so components like AdminAssistant can go quiet the instant
+  // a call starts (see the "callInProgress" checks in AdminAssistant.tsx).
+  // NOTE: this was missing before — AdminAssistant destructured `phase`
+  // from this context but it was never actually provided, so it read as
+  // `undefined` and `undefined !== "idle"` was always true, meaning the
+  // floating assistant bubble treated a call as permanently "in progress"
+  // and never rendered at all. Adding it here is the fix.
+  phase: Phase;
 }
 const CallContext = createContext<CallContextValue | null>(null);
 export function useCall() {
@@ -539,7 +547,7 @@ export default function CallManager({ me, myConversationId, children }: CallMana
   useEffect(() => () => cleanupMedia(), []);
 
   return (
-    <CallContext.Provider value={{ startCall }}>
+    <CallContext.Provider value={{ startCall, phase }}>
       {children}
 
       {mediaError && (
