@@ -26,6 +26,7 @@ import {
   X,
   Pin,
   Pencil,
+  Plus,
 } from "lucide-react";
 import { ChatMessage, Profile, Conversation, ProductSnapshot, ConversationStatus, MessageReaction } from "../lib/types";
 import DebugErrorBoundary from "./DebugErrorBoundary"; // TEMPORARY — remove once quick-wins bug is found
@@ -161,6 +162,10 @@ export default function ChatWindow({
   const [searchLoading, setSearchLoading] = useState(false);
   const [showCannedResponses, setShowCannedResponses] = useState(false);
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  // UI fix: image/voice stay on the always-visible bar; location, product
+  // and quick-replies live behind this collapsible attachment drawer so
+  // the main bar isn't cramped with tiny icons on mobile.
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
 
   const chatRole: "customer" | "owner" = me.role === "customer" ? "customer" : "owner";
   const { startCall } = useCall();
@@ -539,10 +544,18 @@ export default function ChatWindow({
   const handleTogglePin = async (msg: ChatMessage) => {
     setActiveMessageId(null);
     if (msg.pinned_at) {
-      await unpinMessage(msg.id);
+      const ok = await unpinMessage(msg.id);
+      if (!ok) {
+        showError("Unpin nahi ho saka — dobara try karo.");
+        return;
+      }
       setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, pinned_at: null, pinned_by: null } : m)));
     } else {
-      await pinMessage(msg.id, me.id);
+      const ok = await pinMessage(msg.id, me.id);
+      if (!ok) {
+        showError("Pin nahi ho saka — dobara try karo.");
+        return;
+      }
       setMessages((prev) =>
         prev.map((m) => (m.id === msg.id ? { ...m, pinned_at: new Date().toISOString(), pinned_by: me.id } : m))
       );
@@ -553,6 +566,10 @@ export default function ChatWindow({
   const handleReact = async (msg: ChatMessage, emoji: string) => {
     const existing = reactionsByMessage[msg.id]?.find((r) => r.user_id === me.id);
     const result = await toggleReaction(msg.id, me.id, emoji, existing);
+    if (result === "error") {
+      showError("Reaction save nahi hui — dobara try karo (console mein exact error hai).");
+      return;
+    }
     setReactionsByMessage((prev) => {
       if (result === "removed") return removeReactionFor(prev, msg.id, me.id);
       if (result === "added" || result === "changed") {
@@ -706,6 +723,7 @@ export default function ChatWindow({
           <button
             onClick={() => {
               setShowCannedResponses(false);
+              setShowAttachMenu(false);
               setShowSearch(true);
             }}
             className="w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
@@ -857,57 +875,91 @@ export default function ChatWindow({
         </div>
       )}
 
+      {/* Attachment drawer — location / product / quick-replies live here
+          instead of cramming every icon into the main bar. Opens above
+          the input, big labeled rows are much easier to hit on mobile
+          than a row of 9x9 icons. */}
+      {showAttachMenu && (
+        <div className="px-3 pt-2.5 pb-1 border-t shrink-0 bg-app">
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              onClick={() => {
+                setShowAttachMenu(false);
+                handleShareLocation();
+              }}
+              className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-fg/5 hover:bg-fg/10 text-fg"
+            >
+              <span className="w-11 h-11 rounded-full bg-success/15 text-success flex items-center justify-center">
+                <MapPin size={20} />
+              </span>
+              <span className="text-[11px] font-medium">Location</span>
+            </button>
+            {me.role !== "customer" && (
+              <button
+                onClick={() => {
+                  setShowAttachMenu(false);
+                  setShowCannedResponses(false);
+                  setShowSearch(false);
+                  setShowProductPicker(true);
+                }}
+                className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-fg/5 hover:bg-fg/10 text-fg"
+              >
+                <span className="w-11 h-11 rounded-full bg-brand/15 text-brand flex items-center justify-center">
+                  <Package size={20} />
+                </span>
+                <span className="text-[11px] font-medium">Product</span>
+              </button>
+            )}
+            {me.role !== "customer" && (
+              <button
+                onClick={() => {
+                  setShowAttachMenu(false);
+                  setShowProductPicker(false);
+                  setShowSearch(false);
+                  setShowCannedResponses(true);
+                }}
+                className="flex flex-col items-center gap-1.5 py-3 rounded-xl bg-fg/5 hover:bg-fg/10 text-fg"
+              >
+                <span className="w-11 h-11 rounded-full bg-warning/15 text-warning flex items-center justify-center">
+                  <Zap size={20} />
+                </span>
+                <span className="text-[11px] font-medium">Quick reply</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="p-3 border-t shrink-0 bg-app">
         <div className="flex items-center gap-1.5">
           <input ref={fileInputRef} type="file" accept="image/*" hidden onChange={handleImageSelected} />
           <button
-            onClick={handlePickImage}
-            className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
-            title="Send image"
+            onClick={() => setShowAttachMenu((v) => !v)}
+            className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 transition-transform ${
+              showAttachMenu ? "bg-brand/15 text-brand rotate-45" : "text-muted hover:bg-fg/5"
+            }`}
+            title="More options"
+            aria-label="More options"
           >
-            <ImageIcon size={17} />
+            <Plus size={22} />
           </button>
           <button
-            onClick={handleShareLocation}
-            className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
-            title="Share location"
+            onClick={handlePickImage}
+            className="w-11 h-11 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
+            title="Send image"
+            aria-label="Send image"
           >
-            <MapPin size={17} />
+            <ImageIcon size={21} />
           </button>
-          {me.role !== "customer" && (
-            <button
-              onClick={() => {
-                setShowCannedResponses(false);
-                setShowSearch(false);
-                setShowProductPicker(true);
-              }}
-              className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
-              title="Send product"
-            >
-              <Package size={17} />
-            </button>
-          )}
-          {me.role !== "customer" && (
-            <button
-              onClick={() => {
-                setShowProductPicker(false);
-                setShowSearch(false);
-                setShowCannedResponses(true);
-              }}
-              className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 shrink-0"
-              title="Quick replies"
-            >
-              <Zap size={17} />
-            </button>
-          )}
           <button
             onClick={handleToggleRecording}
-            className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${
+            className={`w-11 h-11 rounded-full flex items-center justify-center shrink-0 ${
               recording ? "bg-danger text-white" : "text-muted hover:bg-fg/5"
             }`}
             title={recording ? "Stop recording" : "Record voice note"}
+            aria-label={recording ? "Stop recording" : "Record voice note"}
           >
-            {recording ? <Square size={15} /> : <Mic size={17} />}
+            {recording ? <Square size={19} /> : <Mic size={21} />}
           </button>
 
           <input
@@ -915,15 +967,17 @@ export default function ChatWindow({
             value={text}
             onChange={(e) => handleTextChange(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSendText()}
+            onFocus={() => setShowAttachMenu(false)}
             placeholder={editingMessage ? "Message edit karo…" : "Message likho…"}
-            className="flex-1 px-3.5 py-2.5 rounded-full bg-surface border text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/50"
+            className="flex-1 min-w-0 px-4 py-3 rounded-full bg-surface border text-sm text-fg focus:outline-none focus:ring-2 focus:ring-brand/50"
           />
           <button
             onClick={handleSendText}
             disabled={!text.trim()}
-            className="w-9 h-9 rounded-full bg-brand text-white flex items-center justify-center disabled:opacity-40 shrink-0"
+            className="w-11 h-11 rounded-full bg-brand text-white flex items-center justify-center disabled:opacity-40 shrink-0"
+            aria-label="Send"
           >
-            {editingMessage ? <Pencil size={14} /> : <Send size={15} />}
+            {editingMessage ? <Pencil size={17} /> : <Send size={18} />}
           </button>
         </div>
       </div>
