@@ -30,7 +30,7 @@ export default function ProductPicker({ onPick, onClose }: ProductPickerProps) {
   }, [query]);
 
   return (
-    <div className="absolute inset-0 z-10 bg-app/95 flex flex-col">
+    <div className="absolute inset-0 z-20 flex flex-col" style={{ backgroundColor: "var(--color-bg)" }}>
       <div className="px-4 py-3 border-b flex items-center gap-2">
         <Search size={15} className="text-muted shrink-0" />
         <input
