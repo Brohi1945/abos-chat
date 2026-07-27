@@ -24,6 +24,7 @@ import {
   SmilePlus,
   Copy,
   Ban,
+  MoreHorizontal,
 } from "lucide-react";
 import { ChatMessage, MessageReaction } from "../lib/types";
 
@@ -159,7 +160,22 @@ export default function MessageBubble({
         </div>
       )}
 
-      <div className={`flex ${isMine ? "justify-end" : "justify-start"} group`}>
+      <div className={`flex items-end gap-1 ${isMine ? "justify-end" : "justify-start"} group`}>
+        {!isMine && !isDeleted && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleActive?.();
+            }}
+            className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 self-center text-muted hover:bg-fg/10 ${
+              isActive ? "bg-fg/10" : ""
+            }`}
+            aria-label="Message options"
+            title="Message options"
+          >
+            <MoreHorizontal size={15} />
+          </button>
+        )}
         <div
           onClick={onToggleActive}
           className={`max-w-[85%] sm:max-w-[78%] rounded-2xl overflow-hidden cursor-pointer ${
@@ -354,6 +370,21 @@ export default function MessageBubble({
             )}
           </div>
         </div>
+        {isMine && !isDeleted && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleActive?.();
+            }}
+            className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 self-center text-muted hover:bg-fg/10 ${
+              isActive ? "bg-fg/10" : ""
+            }`}
+            aria-label="Message options"
+            title="Message options"
+          >
+            <MoreHorizontal size={15} />
+          </button>
+        )}
       </div>
 
       {/* Phase 8: "Seen at HH:MM" — shown only under the latest read message,
