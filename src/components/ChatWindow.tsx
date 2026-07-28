@@ -114,6 +114,12 @@ interface ChatWindowProps {
   headerSubtitle?: string;
   onBack?: () => void;
   showBackButton?: boolean;
+  // OwnerInboxScreen floats the ABI assistant bubble at bottom:96/right:20,
+  // fixed-position, so it paints on top of the message list regardless of
+  // this component's own layout. Without extra scroll padding, the last
+  // message can render directly underneath it and get visually covered.
+  // Set true wherever that floating bubble is mounted alongside this screen.
+  reserveBottomSpace?: boolean;
 }
 
 function getSupportedMimeType(): string | null {
@@ -138,6 +144,7 @@ export default function ChatWindow({
   headerSubtitle,
   onBack,
   showBackButton,
+  reserveBottomSpace,
 }: ChatWindowProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [hasMoreOlder, setHasMoreOlder] = useState(false);
@@ -788,7 +795,10 @@ export default function ChatWindow({
         </div>
       )}
 
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4">
+      <div
+        ref={scrollContainerRef}
+        className={`flex-1 overflow-y-auto px-4 pt-4 ${reserveBottomSpace ? "pb-24" : "pb-4"}`}
+      >
         {hasMoreOlder && (
           <div className="flex justify-center mb-3">
             <button
