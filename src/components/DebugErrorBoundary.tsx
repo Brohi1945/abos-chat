@@ -27,6 +27,7 @@
 // ============================================================
 
 import React from "react";
+import { captureError } from "../lib/sentry";
 
 interface Props {
   label: string;
@@ -134,6 +135,9 @@ export class GlobalErrorCatcher extends React.Component<{ children: React.ReactN
 
   pushError(source: string, message: string, stack?: string) {
     console.error(`[GlobalErrorCatcher:${source}]`, message, stack);
+    const err = new Error(message);
+    if (stack) err.stack = stack;
+    captureError(source, err);
     this.setState((s) => ({
       errors: [...s.errors, { source, message, stack }].slice(-5), // keep last 5 only
     }));
