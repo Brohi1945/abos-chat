@@ -18,6 +18,8 @@ export interface Profile {
   // Phase 6: Call waiting
   on_call?: boolean;
   current_call_id?: string | null;
+  // Phase 9 Feature 2: Availability / away toggle
+  is_away: boolean;
 }
 
 export type ConversationStatus = "open" | "pending" | "resolved" | "urgent";
@@ -32,6 +34,8 @@ export interface Conversation {
   tags: string[];
   customer_last_read_at: string | null;
   owner_last_read_at: string | null;
+  // Phase 9 Feature 3: Conversation assignment
+  assigned_to: string | null;
 }
 
 export interface OwnerInboxRow {
@@ -47,6 +51,12 @@ export interface OwnerInboxRow {
   customer_name: string | null;
   customer_email: string | null;
   unread_count: number;
+  // Phase 9 Feature 3: Conversation assignment
+  assigned_to: string | null;
+  assigned_name: string | null;
+  // Phase 9 Feature 2: powers the "away dot" next to an assigned
+  // staff member's name once Feature 3 exists (see blueprint §2.3)
+  assigned_is_away: boolean | null;
 }
 
 export type MessageKind =
@@ -148,6 +158,18 @@ export interface CannedResponse {
   id: string;
   created_by: string | null;
   title: string;
+  body: string;
+  created_at: string;
+}
+
+// Phase 9 Feature 4: staff-only internal notes on a conversation —
+// stored in a completely separate table from abos_chat_messages, a
+// customer session can never read these (see migration_phase9d_internal_notes.sql).
+export interface ConversationNote {
+  id: string;
+  conversation_id: string;
+  author_id: string;
+  author_name: string | null;
   body: string;
   created_at: string;
 }
