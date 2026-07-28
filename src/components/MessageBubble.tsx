@@ -178,7 +178,7 @@ export default function MessageBubble({
         )}
         <div
           onClick={onToggleActive}
-          className={`max-w-[85%] sm:max-w-[78%] rounded-2xl overflow-hidden cursor-pointer ${
+          className={`min-w-0 max-w-[85%] sm:max-w-[78%] rounded-2xl overflow-hidden cursor-pointer ${
             isMine ? "bg-brand text-white rounded-br-md" : "bg-surface text-fg rounded-bl-md"
           }`}
         >
