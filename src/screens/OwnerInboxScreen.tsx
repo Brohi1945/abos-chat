@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useState } from "react";
-import { LogOut, MessageCircle, Bot, Megaphone } from "lucide-react";
+  import React, { useEffect, useMemo, useState } from "react";
+import { LogOut, MessageCircle, Bot, Megaphone, Users } from "lucide-react";
 import { Profile, OwnerInboxRow, ConversationStatus } from "../lib/types";
 import { getOwnerInbox, signOut, toggleAiMode } from "../lib/chatApi";
 import ChatWindow from "../components/ChatWindow";
@@ -8,10 +8,14 @@ import CallManager from "../components/CallManager";
 import ThemeSwitcher from "../components/ThemeSwitcher";
 import BroadcastComposer from "../components/BroadcastComposer";
 import AdminAssistant from "../components/AdminAssistant";
+import StaffScreen from "./StaffScreen";
 
 interface OwnerInboxScreenProps {
   me: Profile;
   onSignedOut: () => void;
+  // True only for the real owner (role === 'owner'), never for an agent —
+  // gates the Staff-management entry point. See App.tsx isOwner/isStaff.
+  isOwner: boolean;
 }
 
 const STATUS_FILTERS: { value: "all" | ConversationStatus; label: string }[] = [
@@ -22,12 +26,13 @@ const STATUS_FILTERS: { value: "all" | ConversationStatus; label: string }[] = [
   { value: "resolved", label: "Resolved" },
 ];
 
-export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenProps) {
+export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInboxScreenProps) {
   const [conversations, setConversations] = useState<OwnerInboxRow[]>([]);
   const [selected, setSelected] = useState<OwnerInboxRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [mobileShowList, setMobileShowList] = useState(true);
   const [statusFilter, setStatusFilter] = useState<"all" | ConversationStatus>("all");
+  const [showStaff, setShowStaff] = useState(false);
 
   // Floating admin AI assistant ("ABI") — mounted once here so it
   // survives conversation switches (voice input/output keeps running
@@ -119,6 +124,15 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
           </div>
           <div className="flex items-center gap-1.5">
             <ThemeSwitcher compact />
+            {isOwner && (
+              <button
+                onClick={() => setShowStaff(true)}
+                title="Staff manage karo"
+                className="w-8 h-8 rounded-full flex items-center justify-center text-muted hover:bg-fg/5"
+              >
+                <Users size={15} />
+              </button>
+            )}
             <button
               onClick={() => setShowBroadcast(true)}
               title="Broadcast message bhejo"
@@ -260,6 +274,7 @@ export default function OwnerInboxScreen({ me, onSignedOut }: OwnerInboxScreenPr
         }}
       />
     )}
+    {showStaff && <StaffScreen me={me} onClose={() => setShowStaff(false)} />}
     </CallManager>
   );
 }
