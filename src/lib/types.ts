@@ -13,6 +13,7 @@ export interface Profile {
   name: string | null;
   email: string | null;
   role: Role;
+  active: boolean;
   created_at: string;
   // Phase 6: Call waiting
   on_call?: boolean;
