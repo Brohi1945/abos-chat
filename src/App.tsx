@@ -12,6 +12,7 @@ import { supabase } from "./lib/supabaseClient";
 import { getCurrentProfile } from "./lib/chatApi";
 import { Profile } from "./lib/types";
 import { ThemeProvider } from "./theme";
+import { setSentryUser } from "./lib/sentry";
 import AuthScreen from "./screens/AuthScreen";
 import CustomerChatScreen from "./screens/CustomerChatScreen";
 import OwnerInboxScreen from "./screens/OwnerInboxScreen";
@@ -36,6 +37,7 @@ export default function App() {
     if (data.session) {
       const p = await getCurrentProfile();
       setProfile(p);
+      if (p) setSentryUser(p.id, p.role);
     } else {
       setProfile(null);
     }
