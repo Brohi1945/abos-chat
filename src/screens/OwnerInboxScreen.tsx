@@ -1,5 +1,5 @@
-  import React, { useEffect, useMemo, useState } from "react";
-import { LogOut, MessageCircle, Bot, Megaphone, Users } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { LogOut, MessageCircle, Bot, Megaphone, Users, MoreVertical } from "lucide-react";
 import { Profile, OwnerInboxRow, ConversationStatus } from "../lib/types";
 import { getOwnerInbox, signOut, toggleAiMode } from "../lib/chatApi";
 import ChatWindow from "../components/ChatWindow";
@@ -110,8 +110,8 @@ export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInbo
         className={`border-r flex flex-col shrink-0 bg-app
           ${mobileShowList ? "flex w-full md:w-72" : "hidden md:flex md:w-72"}`}
       >
-        <div className="px-4 py-3 border-b flex items-center justify-between">
-          <div>
+        <div className="px-4 py-3 border-b flex items-center justify-between gap-2">
+          <div className="min-w-0 flex-1">
             <div className="font-bold text-sm flex items-center gap-1.5 text-fg">
               Inbox
               {totalUnread > 0 && (
@@ -120,28 +120,18 @@ export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInbo
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-muted">{me.email}</div>
+            <div className="text-[11px] text-muted truncate">{me.email}</div>
           </div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-1 shrink-0">
             <ThemeSwitcher compact />
-            {isOwner && (
-              <button
-                onClick={() => setShowStaff(true)}
-                title="Staff manage karo"
-                className="w-8 h-8 rounded-full flex items-center justify-center text-muted hover:bg-fg/5"
-              >
-                <Users size={15} />
-              </button>
-            )}
-            <button
-              onClick={() => setShowBroadcast(true)}
-              title="Broadcast message bhejo"
-              className="w-8 h-8 rounded-full flex items-center justify-center text-muted hover:bg-fg/5"
-            >
-              <Megaphone size={15} />
-            </button>
+            <HeaderMoreMenu
+              isOwner={isOwner}
+              onStaff={() => setShowStaff(true)}
+              onBroadcast={() => setShowBroadcast(true)}
+            />
             <button
               onClick={handleSignOut}
+              title="Sign out"
               className="w-8 h-8 rounded-full flex items-center justify-center text-muted hover:bg-fg/5"
             >
               <LogOut size={15} />
@@ -233,6 +223,7 @@ export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInbo
                 headerSubtitle={selected.customer_number}
                 onBack={handleBack}
                 showBackButton={!mobileShowList}
+                reserveBottomSpace
               />
             </div>
           </>
@@ -276,5 +267,81 @@ export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInbo
     )}
     {showStaff && <StaffScreen me={me} onClose={() => setShowStaff(false)} />}
     </CallManager>
+  );
+}
+
+// ============================================================
+//  HeaderMoreMenu — one button, opens Staff + Broadcast.
+//  Consolidated here (instead of two separate always-visible icons)
+//  because on narrow screens every extra header icon was squeezing
+//  the email/title text into an overflow/wrap. Theme and Sign-out
+//  stay as their own visible buttons per the requested layout —
+//  only these two admin actions move behind this menu.
+// ============================================================
+function HeaderMoreMenu({
+  isOwner,
+  onStaff,
+  onBroadcast,
+}: {
+  isOwner: boolean;
+  onStaff: () => void;
+  onBroadcast: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  return (
+    <div className="relative shrink-0" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Aur options"
+        aria-label="Aur options"
+        aria-expanded={open}
+        className={`w-8 h-8 rounded-full flex items-center justify-center text-muted hover:bg-fg/5 ${
+          open ? "bg-fg/10" : ""
+        }`}
+      >
+        <MoreVertical size={15} />
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-1.5 z-50 bg-surface border rounded-xl shadow-lg py-1 min-w-[170px]">
+          {isOwner && (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onStaff();
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-fg hover:bg-fg/5"
+            >
+              <Users size={14} className="shrink-0 text-muted" />
+              Staff manage karo
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              onBroadcast();
+            }}
+            className="w-full flex items-center gap-2 px-3 py-2 text-xs text-left text-fg hover:bg-fg/5"
+          >
+            <Megaphone size={14} className="shrink-0 text-muted" />
+            Broadcast bhejo
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
