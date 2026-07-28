@@ -22,6 +22,19 @@ const OWNER_EMAILS = (import.meta.env.VITE_OWNER_EMAILS || "")
   .map((e) => e.trim().toLowerCase())
   .filter(Boolean);
 
+// Anyone who should land on the inbox (owner OR agent), and is active.
+// This was the Phase 9 routing gap: agents exist as a role in the DB and
+// in RLS (abos_chat_is_owner already treats owner+agent as staff), but
+// this check used to only look at 'owner' — an agent would silently land
+// on the customer chat screen instead. Fixed here.
+function isStaff(profile: Profile): boolean {
+  if (profile.active === false) return false;
+  if (profile.role === "owner" || profile.role === "agent") return true;
+  return !!profile.email && OWNER_EMAILS.includes(profile.email.toLowerCase());
+}
+
+// Strictly the real owner — used only to gate owner-only admin UI
+// (e.g. the Staff management screen), never for inbox routing.
 function isOwner(profile: Profile): boolean {
   if (profile.role === "owner") return true;
   return !!profile.email && OWNER_EMAILS.includes(profile.email.toLowerCase());
@@ -66,8 +79,8 @@ export default function App() {
       <Toaster position="top-center" />
       {!profile ? (
         <AuthScreen onAuthed={refresh} />
-      ) : isOwner(profile) ? (
-        <OwnerInboxScreen me={profile} onSignedOut={refresh} />
+      ) : isStaff(profile) ? (
+        <OwnerInboxScreen me={profile} onSignedOut={refresh} isOwner={isOwner(profile)} />
       ) : (
         <CustomerChatScreen me={profile} onSignedOut={refresh} />
       )}
