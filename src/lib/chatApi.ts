@@ -848,6 +848,45 @@ export async function uploadMedia(
     return null;
   }
 
-  const { data } = supabase.storage.from("abos-chat-media").getPublicUrl(path);
-  return data.publicUrl;
+// ============================================================
+//  Phase 9 Feature 1: Staff accounts + roles
+// ============================================================
+
+export async function listAllProfiles(): Promise<Profile[]> {
+  const { data, error } = await supabase
+    .from("abos_chat_profiles")
+    .select("*")
+    .order("role", { ascending: false }) // owner, then agent, then customer
+    .order("name", { ascending: true });
+
+  if (error) {
+    console.error(error);
+    return [];
+  }
+  return data as Profile[];
 }
+
+export async function setStaffRole(targetId: string, newRole: "customer" | "agent"): Promise<boolean> {
+  const { error } = await supabase.rpc("abos_chat_set_staff_role", {
+    target_id: targetId,
+    new_role: newRole,
+  });
+  if (error) {
+    console.error(error);
+    return false;
+  }
+  return true;
+}
+
+export async function setStaffActive(targetId: string, isActive: boolean): Promise<boolean> {
+  const { error } = await supabase.rpc("abos_chat_set_staff_active", {
+    target_id: targetId,
+    is_active: isActive,
+  });
+  if (error) {
+    console.error(error);
+    return false;
+  }
+  return true;
+}
+
