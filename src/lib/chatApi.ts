@@ -848,6 +848,10 @@ export async function uploadMedia(
     return null;
   }
 
+  const { data } = supabase.storage.from("abos-chat-media").getPublicUrl(path);
+  return data.publicUrl;
+}
+
 // ============================================================
 //  Phase 9 Feature 1: Staff accounts + roles
 // ============================================================
