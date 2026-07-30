@@ -810,7 +810,7 @@ export default function ChatWindow({
                     {m.sender_role === "customer" ? "Customer" : m.sender_name || "Store"} ·{" "}
                     {new Date(m.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
                   </div>
-                  <div className="text-xs text-fg truncate">{previewText(m)}</div>
+                  <div className="text-xs text-fg line-clamp-1 [overflow-wrap:anywhere]">{previewText(m)}</div>
                 </button>
               ))
             )}
@@ -861,7 +861,7 @@ export default function ChatWindow({
               notes.map((n) => (
                 <div key={n.id} className="px-4 py-3 border-b">
                   <div className="flex items-center justify-between gap-2 mb-1">
-                    <div className="text-[10px] font-semibold text-brand truncate">{n.author_name || "Staff"}</div>
+                    <div className="min-w-0 text-[10px] font-semibold text-brand line-clamp-1 [overflow-wrap:anywhere]">{n.author_name || "Staff"}</div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-[10px] text-muted">
                         {new Date(n.created_at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}
@@ -898,8 +898,8 @@ export default function ChatWindow({
             </button>
           )}
           <div className="min-w-0">
-            <div className="font-semibold text-sm truncate text-fg">{headerTitle}</div>
-            <div className="text-[11px] text-muted truncate">
+            <div className="font-semibold text-sm line-clamp-1 [overflow-wrap:anywhere] text-fg">{headerTitle}</div>
+            <div className="text-[11px] text-muted line-clamp-1 [overflow-wrap:anywhere]">
               {otherTyping ? <span className="text-brand">typing…</span> : headerSubtitle}
             </div>
           </div>
@@ -975,7 +975,7 @@ export default function ChatWindow({
             <div className="text-[10px] text-muted">
               {pinnedMessages.length > 1 ? `${pinnedMessages.length} pinned messages` : "Pinned message"}
             </div>
-            <div className="text-xs text-fg truncate">{previewText(pinnedMessages[0])}</div>
+            <div className="text-xs text-fg line-clamp-1 [overflow-wrap:anywhere]">{previewText(pinnedMessages[0])}</div>
           </div>
         </button>
       )}
@@ -989,7 +989,7 @@ export default function ChatWindow({
 
       <div
         ref={scrollContainerRef}
-        className={`flex-1 overflow-y-auto px-4 pt-4 ${reserveBottomSpace ? "pb-24" : "pb-4"}`}
+        className={`flex-1 overflow-y-auto overflow-x-hidden px-4 pt-4 ${reserveBottomSpace ? "pb-24" : "pb-4"}`}
       >
         {hasMoreOlder && (
           <div className="flex justify-center mb-3">
@@ -1050,7 +1050,7 @@ export default function ChatWindow({
         <div className="px-3 pt-2 flex items-center gap-2 bg-app">
           <div className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-fg/5 border-l-2 border-brand/60">
             <div className="text-[10px] text-brand font-semibold">Replying to</div>
-            <div className="text-xs text-muted truncate">{previewText(replyingTo)}</div>
+            <div className="text-xs text-muted line-clamp-1 [overflow-wrap:anywhere]">{previewText(replyingTo)}</div>
           </div>
           <button
             onClick={handleCancelReply}
@@ -1251,7 +1251,7 @@ function ChatToolsMenu({
               }`}
             >
               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${s.is_away ? "bg-warning" : "bg-success"}`} />
-              <span className="truncate">{s.name || s.email}</span>
+              <span className="min-w-0 line-clamp-1 [overflow-wrap:anywhere]">{s.name || s.email}</span>
             </button>
           ))}
 
