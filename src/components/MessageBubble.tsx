@@ -154,7 +154,7 @@ export default function MessageBubble({
   }
 
   return (
-    <div id={`msg-${message.id}`} className={`flex flex-col ${isMine ? "items-end" : "items-start"} mb-1`}>
+    <div id={`msg-${message.id}`} className={`w-full flex flex-col ${isMine ? "items-end" : "items-start"} mb-1`}>
       {message.pinned_at && (
         <div className={`flex items-center gap-1 mb-0.5 text-[10px] text-muted ${isMine ? "mr-1" : "ml-1"}`}>
           <Pin size={10} className="text-brand" />
@@ -162,7 +162,7 @@ export default function MessageBubble({
         </div>
       )}
 
-      <div className={`flex items-end gap-1 ${isMine ? "justify-end" : "justify-start"} group`}>
+      <div className={`w-full flex items-end gap-1 ${isMine ? "justify-end" : "justify-start"} group`}>
         {!isMine && !isDeleted && (
           <button
             onClick={(e) => {
@@ -202,7 +202,7 @@ export default function MessageBubble({
                 e.stopPropagation();
                 onJumpToReply?.(message.reply_to_id as string);
               }}
-              className={`w-full text-left mx-3.5 mt-2 mb-0.5 px-2 py-1.5 rounded-lg border-l-2 truncate text-[11px] ${
+              className={`w-full text-left mx-3.5 mt-2 mb-0.5 px-2 py-1.5 rounded-lg border-l-2 line-clamp-1 [overflow-wrap:anywhere] text-[11px] ${
                 isMine
                   ? "bg-white/10 border-white/50 text-white/85"
                   : "bg-fg/5 border-brand/60 text-muted"
@@ -314,9 +314,9 @@ export default function MessageBubble({
                       <Package size={16} />
                     </div>
                     <div className="min-w-0">
-                      <div className="text-sm font-semibold truncate">{message.product_snapshot.name}</div>
+                      <div className="text-sm font-semibold line-clamp-1 [overflow-wrap:anywhere]">{message.product_snapshot.name}</div>
                       {message.product_snapshot.category && (
-                        <div className={`text-[10px] truncate ${isMine ? "text-white/70" : "text-muted"}`}>
+                        <div className={`text-[10px] line-clamp-1 [overflow-wrap:anywhere] ${isMine ? "text-white/70" : "text-muted"}`}>
                           {message.product_snapshot.category}
                         </div>
                       )}
@@ -359,8 +359,8 @@ export default function MessageBubble({
                   </div>
                   <div className="px-3.5 pt-2 pb-1 space-y-0.5">
                     {message.order_snapshot.items.map((item, i) => (
-                      <div key={i} className="flex justify-between text-xs">
-                        <span className="truncate">
+                      <div key={i} className="flex justify-between text-xs gap-2">
+                        <span className="min-w-0 line-clamp-1 [overflow-wrap:anywhere]">
                           {item.quantity}x {item.name}
                         </span>
                         <span className="shrink-0 ml-2">Rs {item.price * item.quantity}</span>
