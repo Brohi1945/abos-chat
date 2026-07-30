@@ -112,8 +112,8 @@ export default function CannedResponsesPicker({ myUserId, onPick, onClose }: Can
           items.map((item) => (
             <div key={item.id} className="w-full flex items-center gap-2 px-4 py-3 border-b hover:bg-fg/5">
               <button onClick={() => onPick(item.body)} className="flex-1 min-w-0 text-left">
-                <div className="text-xs font-semibold truncate text-fg">{item.title}</div>
-                <div className="text-[11px] text-muted truncate">{item.body}</div>
+                <div className="text-xs font-semibold line-clamp-1 [overflow-wrap:anywhere] text-fg">{item.title}</div>
+                <div className="text-[11px] text-muted line-clamp-1 [overflow-wrap:anywhere]">{item.body}</div>
               </button>
               <button
                 onClick={() => handleDelete(item.id)}
