@@ -148,7 +148,7 @@ export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInbo
                 </span>
               )}
             </div>
-            <div className="text-[11px] text-muted truncate">{me.email}</div>
+            <div className="text-[11px] text-muted line-clamp-1 [overflow-wrap:anywhere]">{me.email}</div>
           </div>
           <div className="flex items-center gap-1 shrink-0">
             <AwayToggle isAway={isAway} onToggle={handleToggleAway} />
@@ -218,19 +218,21 @@ export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInbo
                   <MessageCircle size={15} />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold truncate flex items-center gap-1.5 text-fg">
-                    {c.customer_name || c.customer_email || "Customer"}
+                  <div className="text-xs font-semibold flex items-center gap-1.5 text-fg">
+                    <span className="min-w-0 line-clamp-1 [overflow-wrap:anywhere]">
+                      {c.customer_name || c.customer_email || "Customer"}
+                    </span>
                     {c.ai_mode && <Bot size={11} className="text-brand shrink-0" />}
                   </div>
-                  <div className="text-[10px] text-muted truncate">{c.customer_number}</div>
+                  <div className="text-[10px] text-muted line-clamp-1 [overflow-wrap:anywhere]">{c.customer_number}</div>
                   {c.assigned_name && (
-                    <div className="text-[10px] text-brand truncate flex items-center gap-1 mt-0.5">
+                    <div className="text-[10px] text-brand flex items-center gap-1 mt-0.5">
                       <span
                         className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                           c.assigned_is_away ? "bg-warning" : "bg-success"
                         }`}
                       />
-                      {c.assigned_name}
+                      <span className="min-w-0 line-clamp-1 [overflow-wrap:anywhere]">{c.assigned_name}</span>
                     </div>
                   )}
                 </div>
