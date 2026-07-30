@@ -108,10 +108,10 @@ export default function StaffScreen({ me, onClose }: StaffScreenProps) {
                     {(p.name || p.email || "?")[0]?.toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-medium text-fg truncate">
+                    <div className="text-xs font-medium text-fg line-clamp-1 [overflow-wrap:anywhere]">
                       {p.name || p.email} {p.id === me.id && <span className="text-muted">(aap)</span>}
                     </div>
-                    <div className="text-[10px] text-muted truncate">{p.email}</div>
+                    <div className="text-[10px] text-muted line-clamp-1 [overflow-wrap:anywhere]">{p.email}</div>
                   </div>
                 </div>
               ))}
@@ -133,15 +133,15 @@ export default function StaffScreen({ me, onClose }: StaffScreenProps) {
                     {(p.name || p.email || "?")[0]?.toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-medium text-fg truncate flex items-center gap-1.5">
-                      {p.name || p.email}
+                    <div className="text-xs font-medium text-fg flex items-center gap-1.5">
+                      <span className="min-w-0 line-clamp-1 [overflow-wrap:anywhere]">{p.name || p.email}</span>
                       {!p.active && (
-                        <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-danger/15 text-danger">
+                        <span className="shrink-0 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-danger/15 text-danger">
                           Deactivated
                         </span>
                       )}
                     </div>
-                    <div className="text-[10px] text-muted truncate">{p.email}</div>
+                    <div className="text-[10px] text-muted line-clamp-1 [overflow-wrap:anywhere]">{p.email}</div>
                   </div>
                   <button
                     disabled={busyId === p.id}
@@ -176,8 +176,8 @@ export default function StaffScreen({ me, onClose }: StaffScreenProps) {
                     {(p.name || p.email || "?")[0]?.toUpperCase()}
                   </div>
                   <div className="min-w-0 flex-1">
-                    <div className="text-xs font-medium text-fg truncate">{p.name || p.email || p.customer_number}</div>
-                    <div className="text-[10px] text-muted truncate">{p.email || p.customer_number}</div>
+                    <div className="text-xs font-medium text-fg line-clamp-1 [overflow-wrap:anywhere]">{p.name || p.email || p.customer_number}</div>
+                    <div className="text-[10px] text-muted line-clamp-1 [overflow-wrap:anywhere]">{p.email || p.customer_number}</div>
                   </div>
                   <button
                     disabled={busyId === p.id}
