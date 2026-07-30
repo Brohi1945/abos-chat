@@ -61,8 +61,8 @@ export default function ProductPicker({ onPick, onClose }: ProductPickerProps) {
                 <Package size={16} />
               </div>
               <div className="min-w-0 flex-1">
-                <div className="text-xs font-semibold truncate">{p.name}</div>
-                <div className="text-[10px] text-muted truncate">
+                <div className="text-xs font-semibold line-clamp-1 [overflow-wrap:anywhere]">{p.name}</div>
+                <div className="text-[10px] text-muted line-clamp-1 [overflow-wrap:anywhere]">
                   Rs {p.price} · {p.stock > 0 ? `${p.stock} in stock` : "Out of stock"}
                 </div>
               </div>
