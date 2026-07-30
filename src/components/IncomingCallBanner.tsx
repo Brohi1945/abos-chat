@@ -101,7 +101,7 @@ export default function IncomingCallBanner({ call, peerLabel, onAccept, onDeclin
           {isWaiting ? <Clock size={18} /> : call.kind === "video" ? <Video size={18} /> : <Phone size={18} />}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold truncate text-fg">{peerLabel}</div>
+          <div className="text-sm font-semibold line-clamp-1 [overflow-wrap:anywhere] text-fg">{peerLabel}</div>
           <div className="text-[11px] text-muted">
             {isWaiting ? 'Already on a call — waiting...' : `Incoming ${call.kind === "video" ? "video" : "voice"} call…`}
           </div>
