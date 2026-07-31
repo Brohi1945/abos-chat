@@ -164,7 +164,7 @@ Pulled directly from the live Supabase project (`akjugxzvexcpslhzvuhz`) via `exe
 
 | Table | What it's for | Notable columns |
 |---|---|---|
-| `abos_chat_profiles` | One row per user (customer or staff) | `role` (`customer`/`agent`/`owner`), `customer_number` (auto `ABOS-000001` style), `active`, `is_away`, `on_call`, `current_call_id` |
+| `abos_chat_profiles` | One row per user (customer or staff) | `role` (`customer`/`agent`/`owner`), `customer_number` (auto `ABOS-000001` style), `active`, `is_away`, `on_call`, `current_call_id`, `preferred_language` (PHASE 4.2: `'roman-urdu'`/`'english'`/null, set once by the AI's `set_preferred_language` tool) |
 | `abos_chat_conversations` | One thread per customer | `status` (open/pending/urgent/resolved), `tags` (text[]), `assigned_to`, `ai_mode`, `customer_last_read_at`/`owner_last_read_at` |
 | `abos_chat_messages` | Every message, every kind | `kind` (`text`/`image`/`location`/`voice`/`product`/`call`/`order`/`recording`), `media_url`, `call_id` (links a `voice`/`recording` message back to the call it came from — used by voicemail & call recording, Phase 10), `reply_to_id`, `edited_at`/`deleted_at`/`pinned_at`, `delivery_status`, `is_ai`, `product_snapshot`/`order_snapshot` (jsonb) |
 | `abos_chat_calls` | Call lifecycle | `status` (ringing/active/ended/missed/declined/waiting), `kind` (voice/video), `caller_role`, `last_heartbeat_at` |
@@ -175,6 +175,8 @@ Pulled directly from the live Supabase project (`akjugxzvexcpslhzvuhz`) via `exe
 | `abos_chat_message_queue` | Offline/failed-send retry queue | `message_data` (jsonb — the original send payload), `attempts`/`max_attempts`, `next_retry_at` |
 | `abos_chat_ai_drafts` | AI agent's in-progress order cart, per conversation | `items` (jsonb) — used by the AI's `add_to_order`/`remove_from_order`/`confirm_order` tools in `api/_lib/aiAgentTools.js` |
 | `abos_chat_exports` | Chat transcript export jobs | **backend-only right now** — `abos_chat_get_transcript()` and `abos_chat_cleanup_old_exports()` exist and the table is live, but there is currently **no frontend button or API route that writes to it**. Don't assume "export chat" works end-to-end just because the table exists — it's schema without UI. |
+| `abos_chat_push_subscriptions` | Web Push (VAPID) subscriptions | `user_id`, `endpoint` (unique), `p256dh`, `auth`. Written by `pushApi.ts`, read by `send-push.js`. **Schema exists and is correct now (2026-07-31 fix), but nothing in the UI calls `subscribeToPush()` yet** — still dead code until wired to a real trigger. Not to be confused with `abos_chat_push_tokens`, an unrelated/unused native-token table left untouched. |
+| `abos_chat_customer_memory` | PHASE 4.1: durable AI-learned facts per customer | `customer_id`, `fact`, `updated_at` — written only by the `remember_customer_fact` AI tool (service role), read into every reply's system prompt; staff-readable via RLS, no customer/agent-write policy on purpose |
 
 **Key functions** (all `SECURITY DEFINER` where they need to bypass RLS)
 
@@ -193,6 +195,10 @@ Pulled directly from the live Supabase project (`akjugxzvexcpslhzvuhz`) via `exe
 - `abos_chat_set_staff_role()` / `abos_chat_set_staff_active()` — used by the Staff screen to promote/demote and activate/deactivate
 
 **Storage:** one bucket, `abos-chat-media` (public) — images, voice notes, voicemail (Phase 10), and call recordings (Phase 10) all live here under `conversations/{conversation_id}/{purpose}/...` prefixes.
+
+**Realtime Authorization policies on `realtime.messages`** (private broadcast channels, not regular tables):
+- `call-signal-{callId}` — call participants only (customer or staff), used for WebRTC signaling
+- `staff-alerts` (PHASE 4.4) — staff-only receive; only the server (service role via the REST broadcast endpoint, `broadcastServerMessage()` in `supabaseServer.js`) ever sends, no client insert policy exists on purpose
 
 ## Deploy
 
@@ -268,6 +274,14 @@ abos-chat/
 │   └── App.tsx                       # Auth gate, routes to customer or owner/agent screen
 ```
 
+## Recent fixes (2026-07-31)
+
+Found during a full code+DB+deployment audit before starting Phase 4 (AI Agent):
+
+- **Agent call-end bug fixed** — `endCall()` in `callApi.ts` inserted `sender_role: me.role` into `abos_chat_messages`, but the DB's `sender_role` CHECK constraint only allows `'customer'`/`'owner'`. Since staff can have `role = 'agent'`, this insert silently failed (constraint violation, uncaught) whenever an agent — not the owner — ended a call, so that call's log bubble (duration/"Missed call" line) never appeared. Fixed to use the existing `chatRoleOf(me)` helper, same as `caller_role` already does a few lines above.
+- **Real-time messaging was poll-only, not actually real-time** — `abos_chat_messages` and `abos_chat_conversations` were never added to the `supabase_realtime` publication, so the `postgres_changes` subscriptions in `subscribeToMessages`/`subscribeToMessageUpdates`/`subscribeToConversation` never fired. The app still felt roughly live because `ChatWindow.tsx` already has a 4-second poll fallback, but it wasn't true push. Fixed by adding both tables to the publication — messages/status changes now arrive instantly instead of up to 4s late.
+- **Push notification table never existed** — `pushApi.ts`/`send-push.js` have always pointed at `abos_chat_push_subscriptions` (Web Push VAPID model: `endpoint`/`p256dh`/`auth`), but that table was never created; the DB only had an unrelated `abos_chat_push_tokens` (different, native-token schema, unused by this code). Created the correct table + RLS. Also added the missing `web-push` npm dependency (`api/send-push.js` imports it, but it was never in `package.json`, so the endpoint would have crashed with "Cannot find module" the moment it was ever called). This feature is still not wired up to any UI trigger — see Known limitations.
+
 ## Recent fixes (2026-07-23)
 
 - **`api/customer-orders.js` route bug fixed** — the file was previously nested at `api/api/customer-orders.js`, which Vercel routed to `/api/api/customer-orders`. The frontend (`chatApi.ts`) always called `/api/customer-orders`, so the "linked orders" panel would have silently 404'd in production. Moved to the correct path.
@@ -308,6 +322,7 @@ Found via live testing + inspecting `net._http_response` logs in Supabase and Ve
 ## Roadmap
 
 **Next up**
+- **Point 4 — AI Agent, in progress.** Full phased plan in `PHASE4_AI_AGENT_BLUEPRINT.md`. Done so far: **4.1 Persistent Customer Memory** (`remember_customer_fact` tool + `abos_chat_customer_memory`), **4.2 Multi-language account-level** (`set_preferred_language` tool + `abos_chat_profiles.preferred_language`), **4.4 Sentiment auto-escalate real alert** (`staff-alerts` Realtime broadcast + toast in Owner Inbox, Realtime-Authorization-secured). Next up: **4.3 AI conversation summary for owner**. Not started: 4.5 proactive follow-ups, 4.6 AI voice calling.
 - **Phase 10 (blueprint sense) — Merging ABOS Chat into the main ABOS product.** Not started. Full plan already written up in `PHASE9_OWNER_STAFF_TOOLS_BLUEPRINT.md` ("Phase 10" section) — becoming a sidebar tab instead of a separate login, WhatsApp messages landing in the same thread, product-website → chat handoff, and ABI becoming this chat's brain.
 - **Remaining calling/video roadmap items (point 3)** — group calls (biggest, needs a participants-table redesign — see Phase 10 notes above) and call transfer. Screen sharing, live adaptive quality, voicemail, and call recording are done (this Phase 10).
 
