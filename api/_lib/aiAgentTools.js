@@ -2,6 +2,7 @@
 // from "just answers questions" into "actually takes the order."
 // Each tool reads/writes the real DB via the service-role client, so
 // results are always grounded in live stock/prices, never invented.
+import { broadcastServerMessage } from "./supabaseServer.js";
 
 function genOrderId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous chars
@@ -116,6 +117,45 @@ export const TOOLS = [
       },
     },
   },
+  // PHASE 4.1: Persistent Customer Memory
+  {
+    type: "function",
+    function: {
+      name: "remember_customer_fact",
+      description:
+        "Save a durable fact about THIS customer that will be shown to you automatically in every future conversation with them — a genuine preference, recurring pattern, or important detail (e.g. \"prefers Basmati rice over Sella\", \"usually orders every Friday\", \"allergic to peanuts\", \"always asks for cash on delivery\"). Only for things worth remembering long-term. Do NOT use this for one-off order details (those already live in the current order) or anything already shown to you under 'What you already know about this customer'.",
+      parameters: {
+        type: "object",
+        properties: {
+          fact: {
+            type: "string",
+            description: "One short, self-contained sentence stating the fact.",
+          },
+        },
+        required: ["fact"],
+      },
+    },
+  },
+  // PHASE 4.2: Multi-language (account-level)
+  {
+    type: "function",
+    function: {
+      name: "set_preferred_language",
+      description:
+        "Record this customer's preferred chat language for future conversations, so a brand-new conversation knows the right language even before they write anything. Only call this ONCE — the first time you can confidently tell from their own message whether they write in Roman Urdu or English. Never call this if 'this customer's preferred language' is already shown to you below.",
+      parameters: {
+        type: "object",
+        properties: {
+          language: {
+            type: "string",
+            enum: ["roman-urdu", "english"],
+            description: "Must be exactly 'roman-urdu' or 'english'.",
+          },
+        },
+        required: ["language"],
+      },
+    },
+  },
 ];
 
 /** Runs one tool call and returns a JSON-serializable result to feed
@@ -220,6 +260,70 @@ export async function executeTool(supabase, ctx, name, args, onOrderConfirmed) {
       .maybeSingle();
     const tags = Array.from(new Set([...(convo?.tags || []), "ai-escalated"]));
     await supabase.from("abos_chat_conversations").update({ status: "urgent", tags }).eq("id", conversationId);
+
+    // PHASE 4.4: real-time alert to staff — best-effort, never blocks
+    // or fails the AI's reply if the broadcast itself has a problem.
+    try {
+      await broadcastServerMessage("staff-alerts", "escalation", {
+        conversation_id: conversationId,
+        reason: (args.reason || "AI flagged this conversation for human review.").slice(0, 300),
+        customer_name: customer?.name || customer?.customer_number || "A customer",
+        at: new Date().toISOString(),
+      });
+    } catch (broadcastErr) {
+      console.error("Failed to broadcast staff alert:", broadcastErr.message);
+    }
+
+    return { ok: true };
+  }
+
+  // PHASE 4.1: Persistent Customer Memory — service-role write, RLS on
+  // abos_chat_customer_memory has no insert policy for regular users on
+  // purpose, so this table can only ever be written from here.
+  if (name === "remember_customer_fact") {
+    const fact = (args.fact || "").trim();
+    if (!fact) return { error: "No fact provided." };
+    if (!customer?.id) return { error: "No customer on this conversation to attach the fact to." };
+
+    // Cheap de-dupe: don't store the exact same fact twice for the same
+    // customer (case-insensitive). Not a semantic dedupe — a slightly
+    // reworded repeat will still be stored, which is an acceptable
+    // trade-off for keeping this fast and simple.
+    const { data: existing } = await supabase
+      .from("abos_chat_customer_memory")
+      .select("id")
+      .eq("customer_id", customer.id)
+      .ilike("fact", fact)
+      .maybeSingle();
+
+    if (existing) {
+      await supabase
+        .from("abos_chat_customer_memory")
+        .update({ updated_at: new Date().toISOString() })
+        .eq("id", existing.id);
+      return { ok: true, note: "Already remembered — refreshed." };
+    }
+
+    const { error: insertErr } = await supabase
+      .from("abos_chat_customer_memory")
+      .insert({ customer_id: customer.id, fact });
+    if (insertErr) return { error: `Could not save: ${insertErr.message}` };
+    return { ok: true };
+  }
+
+  // PHASE 4.2: Multi-language (account-level)
+  if (name === "set_preferred_language") {
+    const lang = args.language;
+    if (lang !== "roman-urdu" && lang !== "english") {
+      return { error: "language must be exactly 'roman-urdu' or 'english'." };
+    }
+    if (!customer?.id) return { error: "No customer on this conversation to attach the language to." };
+
+    const { error: updateErr } = await supabase
+      .from("abos_chat_profiles")
+      .update({ preferred_language: lang })
+      .eq("id", customer.id);
+    if (updateErr) return { error: `Could not save: ${updateErr.message}` };
     return { ok: true };
   }
 
