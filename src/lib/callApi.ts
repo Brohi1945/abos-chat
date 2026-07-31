@@ -210,10 +210,16 @@ export async function endCall(
   // with 403 every time. That's why call-log entries (and the duration/
   // "Missed call" lines derived from them) went missing seemingly at
   // random — it only happened on callee-initiated hangups.
+  // sender_role must be normalized via chatRoleOf() (same helper used
+  // for caller_role above) — the DB's sender_role CHECK constraint only
+  // allows 'customer'/'owner', but me.role can be 'agent' for staff.
+  // Passing me.role directly here made this insert silently fail
+  // (constraint violation) whenever an agent — not the owner — ended a
+  // call, so the call-log bubble never appeared for those calls.
   await supabase.from("abos_chat_messages").insert({
     conversation_id: call.conversation_id,
     sender_id: me.id,
-    sender_role: me.role,
+    sender_role: chatRoleOf(me),
     kind: "call",
     body: label,
     call_id: call.id,
