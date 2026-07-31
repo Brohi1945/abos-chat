@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { LogOut, MessageCircle, Bot, Megaphone, Users, MoreVertical } from "lucide-react";
 import { Profile, OwnerInboxRow, ConversationStatus } from "../lib/types";
-import { getOwnerInbox, signOut, toggleAiMode, setAwayStatus } from "../lib/chatApi";
+import { getOwnerInbox, signOut, toggleAiMode, setAwayStatus, subscribeToStaffAlerts } from "../lib/chatApi";
 import { toastError } from "../lib/toast";
 import ChatWindow from "../components/ChatWindow";
 import OrderContextPanel from "../components/OrderContextPanel";
@@ -85,6 +85,18 @@ export default function OwnerInboxScreen({ me, onSignedOut, isOwner }: OwnerInbo
     load();
     const interval = setInterval(load, 15000);
     return () => clearInterval(interval);
+  }, []);
+
+  // PHASE 4.4: Sentiment Detection → Real Auto-Escalate Alert — the AI
+  // already tags a conversation "urgent" via escalate_to_human; this
+  // surfaces it immediately as a toast instead of waiting for the next
+  // 15s poll to quietly reveal it in the list.
+  useEffect(() => {
+    const unsubscribe = subscribeToStaffAlerts((alert) => {
+      toastError(`${alert.customer_name} — ${alert.reason}`);
+      load();
+    });
+    return unsubscribe;
   }, []);
 
   const handleSignOut = async () => {
