@@ -1013,3 +1013,33 @@ export async function deleteNote(noteId: string): Promise<boolean> {
   return true;
 }
 
+// ============================================================
+//  PHASE 4.4: Sentiment Detection → Real Auto-Escalate Alert
+// ============================================================
+
+export interface StaffAlertPayload {
+  conversation_id: string;
+  reason: string;
+  customer_name: string;
+  at: string;
+}
+
+// Staff-only realtime broadcast — server (service role) is the only
+// sender, per the "staff can receive staff alerts" Realtime
+// Authorization policy. Returns an unsubscribe function.
+export function subscribeToStaffAlerts(onAlert: (payload: StaffAlertPayload) => void): () => void {
+  const channel = supabase.channel("staff-alerts", {
+    config: { broadcast: { self: false }, private: true },
+  });
+
+  channel
+    .on("broadcast", { event: "escalation" }, ({ payload }) => {
+      onAlert(payload as StaffAlertPayload);
+    })
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
