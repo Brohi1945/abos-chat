@@ -54,7 +54,7 @@ function stripStrayMarkdown(text) {
     .trim();
 }
 
-function buildSystemPrompt(products, draftItems) {
+function buildSystemPrompt(products, draftItems, memoryFacts, preferredLanguage) {
   const inventoryBlock =
     products.length === 0
       ? "No product catalog data is currently available."
@@ -73,6 +73,24 @@ function buildSystemPrompt(products, draftItems) {
           .join("\n")}`
       : "No order in progress yet.";
 
+  // PHASE 4.1: Persistent Customer Memory — durable facts learned in
+  // past conversations with this specific customer, if any.
+  const memoryBlock =
+    memoryFacts.length > 0
+      ? `What you already know about this customer from past conversations:\n${memoryFacts
+          .map((f) => `- ${f}`)
+          .join("\n")}`
+      : "";
+
+  // PHASE 4.2: Multi-language (account-level) — known preference from
+  // a previous conversation, if any. Still overridden per-message by
+  // the Language rule below if the customer clearly switches.
+  const languageKnownBlock = preferredLanguage
+    ? `This customer's preferred language (known from earlier conversations): ${
+        preferredLanguage === "roman-urdu" ? "Roman Urdu" : "English"
+      }.`
+    : "";
+
   return `You are "${BOT_NAME}" — a 25+ year veteran sales professional running this store's chat, plus its customer-support rep. You've closed thousands of sales and you know how to read a customer, build value, and get to "yes" — but you're also the person who sorts out problems when something's wrong. You are not a passive FAQ bot.
 
 Here is the store's CURRENT product catalog (name, category, price in PKR, live stock):
@@ -80,8 +98,13 @@ ${inventoryBlock}
 
 ${draftBlock}
 
+${memoryBlock}
+
+${languageKnownBlock}
+
 Language rule (follow this exactly):
-- Look ONLY at the customer's most recent message and pick ONE style: if it's Roman Urdu, reply fully in Roman Urdu; if it's English, reply fully in English. Never mix both in the same reply, and never write the same sentence twice in two languages.
+- Look ONLY at the customer's most recent message and pick ONE style: if it's Roman Urdu, reply fully in Roman Urdu; if it's English, reply fully in English. Never mix both in the same reply, and never write the same sentence twice in two languages. If a preferred language is known from before (above) and their current message is too short/ambiguous to tell (e.g. just "Hi", "ok"), default to that known language instead of guessing.
+- If this customer's preferred language is NOT known (nothing shown above) and their current message clearly indicates one language or the other, call set_preferred_language once so future conversations start off correctly. Never call it if a preferred language is already shown above.
 
 Formatting rule:
 - Plain chat text only. Never use markdown — no **, no _, no bullet dashes, no headings. If you want to emphasize something just say it plainly.
@@ -103,6 +126,9 @@ How to support:
 - If a requested product isn't in the catalog, or the customer wants a refund/return, is upset, or asks for something outside what you can do, call escalate_to_human and tell the customer a team member will follow up shortly — don't guess, and don't try to sell your way out of a complaint.
 - Never claim to know a customer's past order/delivery status unless it was told to you in this conversation.
 - Never invent a price or stock number — always pull from the catalog above.
+
+Remembering things for next time:
+- If the customer reveals a genuine preference or recurring pattern (a favorite product, an allergy, "I always order on Fridays", a delivery instruction they repeat) — call remember_customer_fact so you know it automatically next time. Don't call it for anything already listed under "What you already know about this customer", and don't call it for one-off details about only the current order.
 
 After confirm_order succeeds, tell the customer their order number and that the store will follow up on delivery — don't name the store, just say "the store" / "hum".`;
 }
@@ -172,7 +198,7 @@ export default async function handler(req, res) {
       return;
     }
 
-    const [{ data: recentMessages }, { data: products }, { data: draftRow }, { data: customer }] = await Promise.all([
+    const [{ data: recentMessages }, { data: products }, { data: draftRow }, { data: customer }, { data: memoryRows }] = await Promise.all([
       supabase
         .from("abos_chat_messages")
         .select("sender_role, kind, body, created_at")
@@ -181,7 +207,14 @@ export default async function handler(req, res) {
         .limit(12),
       supabase.from("products").select("name, category, price, stock, reserved_stock").order("name").limit(MAX_PRODUCTS_IN_CONTEXT),
       supabase.from("abos_chat_ai_drafts").select("items").eq("conversation_id", conversationId).maybeSingle(),
-      supabase.from("abos_chat_profiles").select("id, name, email, customer_number").eq("id", conversation.customer_id).maybeSingle(),
+      supabase.from("abos_chat_profiles").select("id, name, email, customer_number, preferred_language").eq("id", conversation.customer_id).maybeSingle(),
+      // PHASE 4.1: Persistent Customer Memory
+      supabase
+        .from("abos_chat_customer_memory")
+        .select("fact")
+        .eq("customer_id", conversation.customer_id)
+        .order("updated_at", { ascending: false })
+        .limit(20),
     ]);
 
     const history = (recentMessages || [])
@@ -195,7 +228,8 @@ export default async function handler(req, res) {
     }
 
     const draftItems = draftRow?.items || [];
-    const systemPrompt = buildSystemPrompt(products || [], draftItems);
+    const memoryFacts = (memoryRows || []).map((r) => r.fact);
+    const systemPrompt = buildSystemPrompt(products || [], draftItems, memoryFacts, customer?.preferred_language || null);
     const messages = [{ role: "system", content: systemPrompt }, ...history];
 
     let confirmedOrder = null;
